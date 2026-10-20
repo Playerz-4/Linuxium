@@ -21,7 +21,7 @@ jobs:
       - name: Build ISO
         run: |
           chmod +x build-linuxium.sh
-          ./build-linuxium.sh ./wallpaper.png ./lynx.png ./Untitled118_20261019185732.png
+          ./build-linuxium.sh ./wallpaper.png ./lynx.png ./grub-bg.png
 
       - name: Upload ISO
         uses: actions/upload-artifact@v4
