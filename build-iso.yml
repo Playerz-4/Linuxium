@@ -1,0 +1,31 @@
+name: Build Linuxium ISO
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container:
+      image: debian:bookworm
+      options: --privileged
+    steps:
+      - name: Install prerequisites
+        run: |
+          apt-get update
+          apt-get install -y sudo git ca-certificates
+
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Build ISO
+        run: |
+          chmod +x build-linuxium.sh
+          ./build-linuxium.sh ./wallpaper.png ./lynx.png ./Untitled118_20261019185732.png
+
+      - name: Upload ISO
+        uses: actions/upload-artifact@v4
+        with:
+          name: linuxium-iso
+          path: linuxium-build/*.iso
+          retention-days: 7
