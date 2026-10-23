@@ -57,7 +57,7 @@ jobs:
           docker run --rm --privileged \
             -v "${{ github.workspace }}:/work" -w /work \
             debian:bookworm \
-            bash -euxo pipefail -c "./build-linuxium.sh ./wallpaper.png ./lynx.png ./Untitled118_20261019185732.png" \
+            bash -euxo pipefail -c "./build-linuxium.sh ./wallpaper.png ./lynx.png ./grub-bg.png" \
             2>&1 | tee build.log
 
       - name: Fix file ownership after the root container build
