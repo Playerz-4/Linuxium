@@ -1,0 +1,150 @@
+name: Build Linuxium ISO
+
+# This file must live at:  .github/workflows/build-iso.yml
+#
+# Changes from the original workflow:
+#   * The job no longer runs *inside* a container. A live-build run needs
+#     way more free disk than a default GitHub runner has, and you cannot
+#     free host disk space from inside a container job. Instead we free
+#     space on the host runner first, then run the exact same Debian 12
+#     container with `docker run --privileged`.
+#   * The full build log is saved and uploaded even when the build fails,
+#     so you can actually see what live-build complained about.
+#   * The ISO artifact is uploaded without re-compression (an ISO is
+#     already compressed; compression-level 0 avoids a long, pointless
+#     zip pass), together with its .sha256 file.
+#   * Pushing a tag like v1.1 also publishes a GitHub Release. GitHub
+#     rejects individual release assets of 2 GiB or more, so a full-size
+#     ISO is split into verified 1900 MiB parts for that step.
+#   * timeout-minutes + concurrency stop a stuck build from burning
+#     6 hours of runner time.
+
+# Deliberately manual (Actions tab -> "Build Linuxium ISO" -> Run workflow)
+# plus version tags, so a one-line commit never starts an hour-long ISO
+# build by surprise. If you would rather build on every push to main, add:
+#     push:
+#       branches: [main]
+on:
+  workflow_dispatch:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write # needed for the tag -> Release step at the bottom
+
+concurrency:
+  group: linuxium-iso-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Free up disk space (a full live build needs it)
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+                      /opt/hostedtoolcache/CodeQL /usr/local/.ghcup
+          sudo docker image prune -af || true
+          df -h /
+
+      - name: Build ISO in a Debian 12 container
+        run: |
+          set -o pipefail
+          chmod +x build-linuxium.sh
+          docker run --rm --privileged \
+            -v "${{ github.workspace }}:/work" -w /work \
+            debian:bookworm \
+            bash -euxo pipefail -c "./build-linuxium.sh ./wallpaper.png ./lynx.png ./Untitled118_20261019185732.png" \
+            2>&1 | tee build.log
+
+      - name: Fix file ownership after the root container build
+        if: always()
+        run: sudo chown -R "$USER:$USER" linuxium-build wallpapers-extra-downloads 2>/dev/null || true
+
+      - name: Show the ISO and verify its checksum
+        run: |
+          ls -lh linuxium-build/*.iso*
+          cd linuxium-build && sha256sum -c ./*.iso.sha256
+
+      - name: Upload ISO
+        uses: actions/upload-artifact@v4
+        with:
+          name: linuxium-iso
+          path: |
+            linuxium-build/*.iso
+            linuxium-build/*.iso.sha256
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linuxium-build-log
+          path: build.log
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Prepare Release assets (only for v* tags)
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets
+          cp linuxium-build/*.iso.sha256 release-assets/
+          # The artifact above is already uploaded; free build trees before
+          # making the split copy so this step cannot run the runner dry.
+          sudo rm -rf linuxium-build/chroot linuxium-build/cache linuxium-build/binary
+          limit=$((1900 * 1024 * 1024))
+          for iso in linuxium-build/*.iso; do
+            base="$(basename "$iso")"
+            size="$(stat -c %s "$iso")"
+            if [ "$size" -le "$limit" ]; then
+              cp "$iso" release-assets/
+            else
+              split -b 1900M -d -a 3 "$iso" "release-assets/${base}.part-"
+              expected="$(awk 'NR == 1 { print $1 }' "release-assets/${base}.sha256")"
+              actual="$(cat release-assets/"${base}".part-* | sha256sum | awk '{ print $1 }')"
+              if [ "$actual" != "$expected" ]; then
+                echo "ERROR: joining the split parts does not reproduce the ISO checksum" >&2
+                exit 1
+              fi
+              echo "Split parts verified against ${base}.sha256"
+              # Windows COPY does not guarantee wildcard ordering, so write
+              # out every part in sequence instead of trusting name sorting.
+              windows_join="copy /b"
+              first_part=true
+              for part in release-assets/"${base}".part-*; do
+                if [ "$first_part" = true ]; then
+                  windows_join="${windows_join} $(basename "$part")"
+                  first_part=false
+                else
+                  windows_join="${windows_join} + $(basename "$part")"
+                fi
+              done
+              windows_join="${windows_join} ${base}"
+              {
+                echo "This ISO was split because GitHub Release assets must be under 2 GiB."
+                echo
+                echo "Download every ${base}.part-* file and the .sha256 file, then join them:"
+                echo "  Linux/macOS: cat ${base}.part-* > ${base}"
+                echo "  Windows CMD: ${windows_join}"
+                echo
+                echo "Verify the joined ISO with the supplied SHA-256 file before writing it to USB."
+              } > release-assets/HOW-TO-JOIN-THE-ISO.txt
+            fi
+          done
+          ls -lh release-assets
+
+      - name: Publish a Release (only for v* tags)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-assets/*
+          fail_on_unmatched_files: true
+          generate_release_notes: true
