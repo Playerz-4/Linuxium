@@ -23,7 +23,7 @@ jobs:
     runs-on: ubuntu-24.04 # pinned: ubuntu-latest drifts to newer releases (26.04 next) mid-flight
     steps:
       - name: Download the ISO from the build run
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           name: linuxium-iso
           path: iso
