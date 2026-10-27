@@ -72,7 +72,7 @@ jobs:
           cd linuxium-build && sha256sum -c ./*.iso.sha256
 
       - name: Upload ISO
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: linuxium-iso
           path: |
@@ -84,7 +84,7 @@ jobs:
 
       - name: Upload build log
         if: always()
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: linuxium-build-log
           path: build.log
