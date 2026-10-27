@@ -46,7 +46,10 @@ jobs:
       - name: Lint the workflows (actionlint also parses the YAML)
         uses: docker://rhysd/actionlint:latest
         with:
-          args: -color-never
+          # NOTE: actionlint's flags are -color / -no-color; there is no
+          # -color-never (that is yamllint). An unknown flag makes
+          # actionlint exit with a usage error and lint nothing.
+          args: -no-color
 
       - name: Verify the build script's default images exist
         run: |
