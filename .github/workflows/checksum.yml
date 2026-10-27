@@ -20,10 +20,10 @@ permissions:
 jobs:
   checksum:
     if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04 # pinned: ubuntu-latest drifts to newer releases (26.04 next) mid-flight
     steps:
       - name: Download the ISO from the build run
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: linuxium-iso
           path: iso
@@ -42,6 +42,14 @@ jobs:
             ls -la
             exit 1
           fi
+          # Cross-check against the checksum the build itself shipped in
+          # this artifact: recomputing a hash proves nothing if the ISO
+          # was corrupted on its way into artifact storage.
+          bundled=(*.iso.sha256)
+          if [ "${#bundled[@]}" -eq 1 ]; then
+            echo "Verifying ISO against bundled ${bundled[0]}"
+            sha256sum -c "${bundled[0]}"
+          fi
           sha256sum "${isos[@]}" > SHA256SUMS
           cat SHA256SUMS
           {
@@ -53,7 +61,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload SHA256SUMS
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: linuxium-sha256
           path: iso/SHA256SUMS

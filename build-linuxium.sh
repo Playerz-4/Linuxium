@@ -45,6 +45,23 @@ WORK="linuxium-build"
 
 if [ "$(id -u)" -eq 0 ]; then SUDO=(); else SUDO=(sudo); fi
 
+usage() {
+  echo "Usage: $0 [wallpaper.png] [logo.png] [grub-background.png] [extra-wallpapers-dir]"
+  echo "  All arguments are optional; the defaults are the images shipped in this repository."
+}
+
+case "${1:-}" in
+  -h|--help)
+    usage
+    exit 0
+    ;;
+esac
+if [ "$#" -gt 4 ]; then
+  echo "ERROR: too many arguments (expected at most 4)" >&2
+  usage >&2
+  exit 1
+fi
+
 VERIFY_DIR=""
 cleanup() {
   if [ -n "${VERIFY_DIR:-}" ] && [ -d "${VERIFY_DIR}" ]; then
@@ -56,7 +73,7 @@ trap cleanup EXIT
 for f in "$WALLPAPER" "$LOGO" "$GRUB_BG"; do
   if [ ! -f "$f" ]; then
     echo "File not found: $f"
-    echo "Usage: $0 [wallpaper.png] [logo.png] [grub-background.png] [extra-wallpapers-dir]"
+    usage
     exit 1
   fi
 done
@@ -567,12 +584,14 @@ GRUB_THEME_SRC="/usr/share/live/build/bootloaders/grub-pc/live-theme/theme.txt"
 if [ -f "$GRUB_THEME_SRC" ]; then
   mkdir -p config/bootloaders/grub-pc/live-theme
   cp "$GRUB_THEME_SRC" config/bootloaders/grub-pc/live-theme/theme.txt
-  sed -i 's/^title-text:.*/title-text: "Linuxium"/' config/bootloaders/grub-pc/live-theme/theme.txt
+  sed -i 's/^title-text[[:space:]]*:.*/title-text: "Linuxium"/' config/bootloaders/grub-pc/live-theme/theme.txt
 fi
 SYS_MENU_SRC="/usr/share/live/build/bootloaders/syslinux_common/menu.cfg"
 if [ -f "$SYS_MENU_SRC" ]; then
   cp "$SYS_MENU_SRC" config/bootloaders/syslinux_common/menu.cfg
-  sed -i 's/^menu title.*/menu title Linuxium/' config/bootloaders/syslinux_common/menu.cfg
+  # ISOLINUX directives are case-insensitive and templates vary in case;
+  # match "menu title" in any case (GNU sed I flag).
+  sed -i 's/^menu title.*/menu title Linuxium/I' config/bootloaders/syslinux_common/menu.cfg
 fi
 
 # Bookworm live-build adds findiso=${iso_path} to the normal GRUB live
@@ -597,8 +616,8 @@ TMP_CFG="${GRUB_CFG}.tmp.$$"
 trap 'rm -f "$TMP_CFG"' EXIT HUP INT TERM
 
 awk '
-  /^menuentry .*fail-safe mode/ { failsafe = 1 }
-  /^}/ { failsafe = 0 }
+  /^[[:space:]]*menuentry .*fail-safe mode/ { failsafe = 1 }
+  /^[[:space:]]*}/ { failsafe = 0 }
   failsafe && /^[[:space:]]*linux[[:space:]]/ {
     seen++
     if ($0 !~ /findiso=/) $0 = $0 " findiso=${iso_path}"
@@ -956,7 +975,12 @@ mkdir "$lock" 2>/dev/null || exit 0
 trap 'rmdir "$lock" 2>/dev/null || true' EXIT INT TERM
 # Give the desktop a moment to come up first.
 sleep 3
-exec /usr/bin/linuxium-welcome
+# Do NOT exec here: exec replaces this shell, so the EXIT trap above would
+# never run and the lock directory would leak, blocking the welcome window
+# for the rest of the session. Run it as a child and exit with its status
+# so the trap removes the lock when it closes.
+/usr/bin/linuxium-welcome
+exit $?
 EOF
 chmod +x "$BIN_INC/linuxium-welcome-autostart"
 
@@ -1621,7 +1645,7 @@ NF
 # ---- Calamares: keep Debian's tested module sequence/helpers, rebrand ----
 # NOTE: /etc/calamares (lowercase) is the correct path on Debian 12.
 if [ -f /etc/calamares/settings.conf ]; then
-  sed -i 's|^branding:.*|branding: linuxium|' /etc/calamares/settings.conf
+  sed -i 's|^branding[[:space:]]*:.*|branding: linuxium|' /etc/calamares/settings.conf
 fi
 
 # Debian's signed GRUB binary has the bootloader ID "debian" hard-coded
@@ -1640,8 +1664,10 @@ if [ -f /etc/calamares/modules/bootloader.conf ]; then
 fi
 
 # Linuxium needs a bit more disk than a minimal Debian live image.
+# NOTE: match a decimal value whole ("5.5"), not just its integer part -
+# replacing only "[0-9]+" would turn 5.5 into 16.5.
 if [ -f /etc/calamares/modules/welcome.conf ]; then
-  sed -i -E 's|(requiredStorage:[[:space:]]*)[0-9]+|\116|' /etc/calamares/modules/welcome.conf
+  sed -i -E 's|(requiredStorage:[[:space:]]*)[0-9]+([.][0-9]+)?|\116|' /etc/calamares/modules/welcome.conf
 fi
 
 # Remove the installer itself from the installed system too (Debian's
