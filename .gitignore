@@ -1,0 +1,12 @@
+# Linuxium build outputs (never commit these)
+linuxium-build/
+wallpapers-extra-downloads/
+wallpapers/
+release-assets/
+build.log
+
+# ISOs, checksums and VM disks (from local QEMU/noVNC testing)
+*.iso
+*.iso.sha256
+*.qcow2
+OVMF_VARS.fd

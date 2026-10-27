@@ -1,0 +1,57 @@
+name: Lint scripts and workflows
+
+# Fast checks on every change to the shell script or the workflows, so a
+# syntax slip is caught in a pull request instead of an hour into an ISO
+# build (or worse, in an ISO that does not boot).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "build-linuxium.sh"
+      - ".github/workflows/*.yml"
+      - ".github/dependabot.yml"
+  pull_request:
+    paths:
+      - "build-linuxium.sh"
+      - ".github/workflows/*.yml"
+      - ".github/dependabot.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linuxium-lint-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install ShellCheck
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+
+      - name: Bash syntax check
+        run: bash -n build-linuxium.sh
+
+      - name: ShellCheck the build script
+        run: shellcheck -S style build-linuxium.sh
+
+      - name: Lint the workflows (actionlint also parses the YAML)
+        uses: docker://rhysd/actionlint:latest
+        with:
+          args: -color-never
+
+      - name: Verify the build script's default images exist
+        run: |
+          # The defaults in build-linuxium.sh must be files in this repo,
+          # or a no-argument local build dies on the file check.
+          for f in wallpaper.png lynx.png grub-bg.png; do
+            test -f "$f" || { echo "ERROR: default image $f missing from repo" >&2; exit 1; }
+          done

@@ -45,6 +45,23 @@ WORK="linuxium-build"
 
 if [ "$(id -u)" -eq 0 ]; then SUDO=(); else SUDO=(sudo); fi
 
+usage() {
+  echo "Usage: $0 [wallpaper.png] [logo.png] [grub-background.png] [extra-wallpapers-dir]"
+  echo "  All arguments are optional; the defaults are the images shipped in this repository."
+}
+
+case "${1:-}" in
+  -h|--help)
+    usage
+    exit 0
+    ;;
+esac
+if [ "$#" -gt 4 ]; then
+  echo "ERROR: too many arguments (expected at most 4)" >&2
+  usage >&2
+  exit 1
+fi
+
 VERIFY_DIR=""
 cleanup() {
   if [ -n "${VERIFY_DIR:-}" ] && [ -d "${VERIFY_DIR}" ]; then
@@ -56,7 +73,7 @@ trap cleanup EXIT
 for f in "$WALLPAPER" "$LOGO" "$GRUB_BG"; do
   if [ ! -f "$f" ]; then
     echo "File not found: $f"
-    echo "Usage: $0 [wallpaper.png] [logo.png] [grub-background.png] [extra-wallpapers-dir]"
+    usage
     exit 1
   fi
 done
@@ -956,7 +973,12 @@ mkdir "$lock" 2>/dev/null || exit 0
 trap 'rmdir "$lock" 2>/dev/null || true' EXIT INT TERM
 # Give the desktop a moment to come up first.
 sleep 3
-exec /usr/bin/linuxium-welcome
+# Do NOT exec here: exec replaces this shell, so the EXIT trap above would
+# never run and the lock directory would leak, blocking the welcome window
+# for the rest of the session. Run it as a child and exit with its status
+# so the trap removes the lock when it closes.
+/usr/bin/linuxium-welcome
+exit $?
 EOF
 chmod +x "$BIN_INC/linuxium-welcome-autostart"
 

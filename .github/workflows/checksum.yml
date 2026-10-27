@@ -42,6 +42,14 @@ jobs:
             ls -la
             exit 1
           fi
+          # Cross-check against the checksum the build itself shipped in
+          # this artifact: recomputing a hash proves nothing if the ISO
+          # was corrupted on its way into artifact storage.
+          bundled=(*.iso.sha256)
+          if [ "${#bundled[@]}" -eq 1 ]; then
+            echo "Verifying ISO against bundled ${bundled[0]}"
+            sha256sum -c "${bundled[0]}"
+          fi
           sha256sum "${isos[@]}" > SHA256SUMS
           cat SHA256SUMS
           {

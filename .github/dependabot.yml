@@ -1,0 +1,9 @@
+version: 2
+updates:
+  # Keep the GitHub Actions used by the build/checksum/lint workflows
+  # (checkout, upload/download-artifact, action-gh-release, actionlint)
+  # on supported versions; GitHub retires old action runtimes over time.
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
