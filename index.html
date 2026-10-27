@@ -38,12 +38,12 @@
       <div class="win term">
         <div class="tb">Terminal</div>
 <pre><span class="p">linuxium@linuxium:~$</span> cat /etc/os-release
-PRETTY_NAME="Linuxium 1.0"
+PRETTY_NAME="Linuxium 1.1"
 NAME="Linuxium"
-VERSION_ID="1.0"
-VERSION="1.0 (Tux)"
+VERSION_ID="1.1"
+VERSION="1.1 (Playerz)"
 VERSION_CODENAME=bookworm
-ID=linuxium
+ID=debian
 ID_LIKE=debian
 <span class="p">linuxium@linuxium:~$</span> <span class="cur"></span></pre>
       </div>
@@ -68,7 +68,7 @@ ID_LIKE=debian
         <div><dt>Login screen</dt><dd>LightDM, with the Tux wallpaper behind it</dd></div>
         <div><dt>Apps</dt><dd>Firefox ESR, LibreOffice Writer and Calc, VLC</dd></div>
         <div><dt>Sound and network</dt><dd>PipeWire and NetworkManager</dd></div>
-        <div><dt>Installing</dt><dd>Try the live session first, then install from it</dd></div>
+        <div><dt>Installing</dt><dd>Try the live session first, then install from it with Calamares</dd></div>
         <div><dt>Hardware</dt><dd>64-bit, 2 GB of RAM, 20 GB of disk</dd></div>
       </dl>
     </section>
@@ -81,7 +81,7 @@ ID_LIKE=debian
         <li>Restart and open the boot menu (usually F12, F10, Esc, or Del), then pick the USB drive.</li>
         <li>Choose the live session to look around, or the installer to put Linuxium on your disk.</li>
       </ol>
-      <p class="fine">Secure Boot isn’t supported yet. If the stick won’t start, turn Secure Boot off in your firmware settings.</p>
+      <p class="fine">UEFI Secure Boot is supported. If the stick won’t start, check that your firmware is booting in UEFI mode.</p>
     </section>
 
     <div class="band">
