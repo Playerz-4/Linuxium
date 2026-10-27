@@ -1,7 +1,8 @@
 # Linuxium build outputs (never commit these)
+# NOTE: wallpapers/ is deliberately NOT ignored - it is a documented
+# input directory (extra wallpapers for the build), including in CI.
 linuxium-build/
 wallpapers-extra-downloads/
-wallpapers/
 release-assets/
 build.log
 
