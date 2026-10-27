@@ -655,6 +655,7 @@ Presentation
     Timer {
         interval: 15000
         repeat: true
+        running: true
         onTriggered: presentation.goToNextSlide()
     }
 
@@ -1078,6 +1079,9 @@ start-default-seat=true
 [Seat:*]
 greeter-session=lightdm-gtk-greeter
 user-session=cinnamon
+autologin-user=linuxium
+autologin-user-timeout=0
+autologin-session=cinnamon
 EOF
 
 # 8a. Permanent VM graphics safeguards (present in the live image AND in
@@ -1450,6 +1454,8 @@ Config ()
 		if [ -n "${LINUXIUM_SESSION}" ]
 		then
 			echo "user-session=${LINUXIUM_SESSION}"
+			echo "autologin-user=linuxium"
+			echo "autologin-user-timeout=0"
 			echo "autologin-session=${LINUXIUM_SESSION}"
 		fi
 	} > /etc/lightdm/lightdm.conf.d/90-linuxium-live.conf
