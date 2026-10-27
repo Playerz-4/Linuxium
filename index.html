@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Linuxium: Debian with the Cinnamon desktop</title>
 <meta name="description" content="Linuxium is a free Linux distribution built on Debian 12 with the Cinnamon desktop.">
+<meta name="theme-color" content="#f7f7f4">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🐧</text></svg>">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -12,38 +13,45 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
+<a class="skip" href="#main">Skip to content</a>
 <div class="wrap">
 
   <header class="top">
     <a class="brand" href="index.html">Linuxium</a>
-    <nav>
+    <nav aria-label="Main">
       <a href="#get">Get it</a>
       <a href="forums.html">Forum</a>
       <a href="https://github.com/playerz-4/linuxium">Source</a>
     </nav>
   </header>
 
-  <main>
+  <main id="main">
     <div class="hero">
+      <span class="eyebrow">Debian 12 · Cinnamon · Free and open source</span>
       <h1>Linux with a desktop you already know.</h1>
-      <p class="lead">Linuxium is Debian 12 with the Cinnamon desktop, a dark look, and the software most people need on day one. Boot it from a USB stick to try it, or install it.</p>
+      <p class="lead">Linuxium is Debian 12 with the Cinnamon desktop, a clean dark look, and the software most people need on day one. Boot it from a USB stick to try it, or install it.</p>
       <div class="actions">
         <a class="btn main" href="https://github.com/playerz-4/linuxium/releases">Download the ISO</a>
         <a class="btn alt" href="https://github.com/playerz-4/linuxium">Read the source</a>
       </div>
-      <p class="fine">Free and open source. Runs on 64-bit PCs.</p>
+      <ul class="chips">
+        <li>Live USB — try before you install</li>
+        <li>Calamares installer</li>
+        <li>UEFI Secure Boot</li>
+        <li>64-bit PCs · 4 GB RAM recommended</li>
+      </ul>
     </div>
 
     <div class="desk" role="img" aria-label="Illustration of the Linuxium desktop: a terminal showing the system release file and a file manager over the Tux wallpaper">
       <div class="win term">
         <div class="tb">Terminal</div>
 <pre><span class="p">linuxium@linuxium:~$</span> cat /etc/os-release
-PRETTY_NAME="Linuxium 1.0"
+PRETTY_NAME="Linuxium 1.1"
 NAME="Linuxium"
-VERSION_ID="1.0"
-VERSION="1.0 (Tux)"
+VERSION_ID="1.1"
+VERSION="1.1 (Playerz)"
 VERSION_CODENAME=bookworm
-ID=linuxium
+ID=debian
 ID_LIKE=debian
 <span class="p">linuxium@linuxium:~$</span> <span class="cur"></span></pre>
       </div>
@@ -68,20 +76,22 @@ ID_LIKE=debian
         <div><dt>Login screen</dt><dd>LightDM, with the Tux wallpaper behind it</dd></div>
         <div><dt>Apps</dt><dd>Firefox ESR, LibreOffice Writer and Calc, VLC</dd></div>
         <div><dt>Sound and network</dt><dd>PipeWire and NetworkManager</dd></div>
-        <div><dt>Installing</dt><dd>Try the live session first, then install from it</dd></div>
-        <div><dt>Hardware</dt><dd>64-bit, 2 GB of RAM, 20 GB of disk</dd></div>
+        <div><dt>Installing</dt><dd>Try the live session first, then install from it with Calamares</dd></div>
       </dl>
     </section>
 
     <section id="get">
-      <h2>Put it on a USB stick</h2>
+      <div class="section-head">
+        <h2>Put it on a USB stick</h2>
+        <p>Four steps, about ten minutes.</p>
+      </div>
       <ol class="steps">
         <li>Download the latest ISO from the Releases page.</li>
         <li>Write it to a USB drive of 4 GB or more with balenaEtcher, or Rufus in DD mode. This erases the drive.</li>
         <li>Restart and open the boot menu (usually F12, F10, Esc, or Del), then pick the USB drive.</li>
         <li>Choose the live session to look around, or the installer to put Linuxium on your disk.</li>
       </ol>
-      <p class="fine">Secure Boot isn’t supported yet. If the stick won’t start, turn Secure Boot off in your firmware settings.</p>
+      <p class="fine steps-note">UEFI Secure Boot is supported. If the stick won’t start, check that your firmware is booting in UEFI mode.</p>
     </section>
 
     <div class="band">
@@ -89,13 +99,13 @@ ID_LIKE=debian
         <h2>Stuck, or want to show off your desktop?</h2>
         <p>Ask for help, report a bug, or suggest what Linuxium should do next.</p>
       </div>
-      <a class="btn alt" href="forums.html">Open the forum</a>
+      <a class="btn main" href="forums.html">Open the forum</a>
     </div>
   </main>
 
   <footer>
     <p>© 2026 Linuxium. An independent project, not affiliated with Debian, Linux Mint, or the Cinnamon team. Linux is a trademark of Linus Torvalds.</p>
-    <nav>
+    <nav aria-label="Footer">
       <a href="https://github.com/playerz-4/linuxium/releases">Download</a>
       <a href="forums.html">Forum</a>
       <a href="https://github.com/playerz-4/linuxium">GitHub</a>

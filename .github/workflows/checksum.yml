@@ -33,7 +33,16 @@ jobs:
       - name: Create SHA256SUMS
         run: |
           cd iso
-          sha256sum *.iso > SHA256SUMS
+          # Fail loudly and clearly instead of letting an unexpanded
+          # "*.iso" glob reach sha256sum as a literal filename.
+          shopt -s nullglob
+          isos=(*.iso)
+          if [ "${#isos[@]}" -ne 1 ]; then
+            echo "ERROR: expected exactly one .iso in the artifact, found ${#isos[@]}: ${isos[*]:-none}" >&2
+            ls -la
+            exit 1
+          fi
+          sha256sum "${isos[@]}" > SHA256SUMS
           cat SHA256SUMS
           {
             echo "### Linuxium SHA256"

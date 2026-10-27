@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Linuxium forum</title>
 <meta name="description" content="Ask questions, report bugs, and share your desktop with the Linuxium community.">
+<meta name="theme-color" content="#f7f7f4">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🐧</text></svg>">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -12,19 +13,21 @@
 <link rel="stylesheet" href="style.css">
 </head>
 <body>
+<a class="skip" href="#main">Skip to content</a>
 <div class="wrap">
 
   <header class="top">
     <a class="brand" href="index.html">Linuxium</a>
-    <nav>
+    <nav aria-label="Main">
       <a href="index.html#get">Get it</a>
       <a href="forums.html" aria-current="page">Forum</a>
       <a href="https://github.com/playerz-4/linuxium">Source</a>
     </nav>
   </header>
 
-  <main>
+  <main id="main">
     <div class="page-head">
+      <span class="eyebrow">Community</span>
       <h1>Forum</h1>
       <p class="lead">Ask for help, report a bug, or show off your desktop. Pick a board below, or start a new topic.</p>
       <div class="actions">
@@ -88,7 +91,7 @@
 
   <footer>
     <p>© 2026 Linuxium. An independent project, not affiliated with Debian, Linux Mint, or the Cinnamon team. Linux is a trademark of Linus Torvalds.</p>
-    <nav>
+    <nav aria-label="Footer">
       <a href="https://github.com/playerz-4/linuxium/releases">Download</a>
       <a href="forums.html">Forum</a>
       <a href="https://github.com/playerz-4/linuxium">GitHub</a>

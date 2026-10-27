@@ -5,11 +5,11 @@
 # Usage:  ./build-linuxium.sh [wallpaper.png] [logo.png] [grub-background.png] [extra-wallpapers-dir]
 #   wallpaper.png        desktop + login wallpaper          (default ./wallpaper.png)
 #   logo.png             boot splash (Plymouth) + neofetch  (default ./lynx.png)
-#   grub-background.png  boot-menu background               (default ./Untitled118_20261019185732.png)
+#   grub-background.png  boot-menu background               (default ./grub-bg.png)
 #   extra-wallpapers-dir optional folder of your own .jpg/.png wallpapers
 #                                                              (default ./wallpapers)
 #
-# What changed in this fixed version (see README-CHANGES.md for the full story):
+# What changed in this fixed version:
 #   * Boot-menu background actually works in BOTH firmware modes. The old
 #     script searched the live-build templates for files called splash.png /
 #     background.png, but in Debian 12's live-build the only template image
@@ -39,7 +39,7 @@ export DEBIAN_FRONTEND=noninteractive
 LINUXIUM_VERSION="1.1"
 WALLPAPER="${1:-./wallpaper.png}"
 LOGO="${2:-./lynx.png}"
-GRUB_BG="${3:-./Untitled118_20261019185732.png}"
+GRUB_BG="${3:-./grub-bg.png}"
 EXTRA_WALLPAPERS_DIR="${4:-./wallpapers}"
 WORK="linuxium-build"
 
@@ -83,7 +83,15 @@ mkdir -p "$DOWNLOAD_CACHE"
   imagemagick curl ca-certificates librsvg2-bin sbsigntool
 
 # ImageMagick 7 calls it "magick", ImageMagick 6 (Debian 12) uses "convert".
-if command -v magick >/dev/null 2>&1; then IM=(magick); else IM=(convert); fi
+# NOTE: "identify" is a separate program in IM6, so "convert identify ..."
+# does NOT work there; keep a dedicated array for it instead of guessing.
+if command -v magick >/dev/null 2>&1; then
+  IM=(magick)
+  IM_IDENTIFY=(magick identify)
+else
+  IM=(convert)
+  IM_IDENTIFY=(identify)
+fi
 
 # 2. Fresh working tree
 "${SUDO[@]}" rm -rf "$WORK"
@@ -327,13 +335,24 @@ for entry in "${WIKI_WALLPAPERS[@]}"; do
     fi
     mv "$wp_cache.part" "$wp_cache"
   fi
+  # Validate the cached file before trusting it. A download that "succeeded"
+  # at the HTTP level can still be an error page or a truncated file, and an
+  # unvalidated bad cache entry would otherwise poison every later rebuild:
+  # it exists and is non-empty, so it would never be re-downloaded, yet it
+  # would fail conversion (and be silently skipped) forever.
+  if ! "${IM_IDENTIFY[@]}" "$wp_cache" >/dev/null 2>&1; then
+    echo "WARNING: $wp_cache is not a readable image - deleting it so the next build re-downloads it" >&2
+    rm -f "$wp_cache"
+    continue
+  fi
   if "${IM[@]}" "$wp_cache" -auto-orient -resize '1920x1080^' -gravity center \
        -extent 1920x1080 -strip -quality 88 "$WP_DIR/$wp_out"; then
     WP_NAMES+=("$wp_name")
     WP_FILES+=("$wp_out")
     printf '%s\n' "$wp_credit" >> "$DOC_DIR/CREDITS.txt"
   else
-    echo "WARNING: could not convert $wp_cache - skipping this wallpaper" >&2
+    echo "WARNING: could not convert $wp_cache - deleting the cached copy and skipping this wallpaper" >&2
+    rm -f "$wp_cache"
   fi
 done
 
@@ -540,8 +559,7 @@ mkdir -p config/bootloaders/grub-pc config/bootloaders/syslinux_common
   -resize 640x480 -gravity center -extent 640x480 -strip \
   "PNG24:config/bootloaders/syslinux_common/splash.png"
 echo "Boot-menu backgrounds written:"
-"${IM[@]}" identify config/bootloaders/grub-pc/splash.png config/bootloaders/syslinux_common/splash.png 2>/dev/null \
-  || identify config/bootloaders/grub-pc/splash.png config/bootloaders/syslinux_common/splash.png || true
+"${IM_IDENTIFY[@]}" config/bootloaders/grub-pc/splash.png config/bootloaders/syslinux_common/splash.png || true
 
 # Give the boot menus a Linuxium title (based on the installed templates,
 # so this keeps working even if the templates change a little).
@@ -962,7 +980,7 @@ Version=1.0
 Name=Linuxium Welcome
 Comment=Welcome to Linuxium :) - try, install and explore
 Exec=linuxium-welcome
-TryExec=calamares
+TryExec=linuxium-welcome
 Icon=linuxium
 Terminal=false
 Categories=System;Utility;
@@ -1540,18 +1558,18 @@ dconf update
 # and the Calamares helpers, which look for the "bookworm" release -
 # keep working)
 cat > /etc/os-release <<'OSR'
-PRETTY_NAME="Linuxium 1.1"
+PRETTY_NAME="Linuxium __LINUXIUM_VERSION__"
 NAME="Linuxium"
-VERSION_ID="1.1"
-VERSION="1.1 (Playerz)"
+VERSION_ID="__LINUXIUM_VERSION__"
+VERSION="__LINUXIUM_VERSION__ (Playerz)"
 VERSION_CODENAME=bookworm
 ID=debian
 ID_LIKE=debian
 BUG_REPORT_URL="https://bugs.debian.org/"
 OSR
 
-printf 'Linuxium 1.1 \\n \\l\n\n' > /etc/issue
-echo "Linuxium 1.1" > /etc/issue.net
+printf 'Linuxium __LINUXIUM_VERSION__ \\n \\l\n\n' > /etc/issue
+echo "Linuxium __LINUXIUM_VERSION__" > /etc/issue.net
 
 # Make sure LightDM is the display manager AND that systemd really boots
 # to the graphical target. Do not rely only on the lightdm package's
@@ -1662,6 +1680,15 @@ GRUBCFG
 fi
 EOF
 chmod +x config/hooks/normal/0100-linuxium.hook.chroot
+# The hook above is a quoted heredoc (it must not be expanded by this
+# script), so substitute the version placeholder now. LINUXIUM_VERSION
+# stays the single place a release version bump has to happen.
+sed -i "s/__LINUXIUM_VERSION__/${LINUXIUM_VERSION}/g" \
+  config/hooks/normal/0100-linuxium.hook.chroot
+if grep -q '__LINUXIUM_VERSION__' config/hooks/normal/0100-linuxium.hook.chroot; then
+  echo "ERROR: version substitution failed in the chroot hook" >&2
+  exit 1
+fi
 
 # 10. Build the ISO
 "${SUDO[@]}" lb build

@@ -121,7 +121,7 @@ On top of plain Debian and Cinnamon, Linuxium adds:
 
 ### 9. Cloud builds
 
-Because building an ISO needs a full Linux environment and a lot of disk space, Linuxium includes a **GitHub Actions** workflow. It starts a clean Debian 12 container in the cloud, runs the build script, and gives you the finished ISO as a download. This means the distro can be built from any computer with a web browser.
+Because building an ISO needs a full Linux environment and a lot of disk space, Linuxium includes a **GitHub Actions** workflow. It frees up disk space on the cloud runner, runs the build script inside a privileged Debian 12 container, and gives you the finished ISO as a download. This means the distro can be built from any computer with a web browser.
 
 ---
 
@@ -182,7 +182,7 @@ To make a bootable USB drive:
 ### Option A: Build in the cloud with GitHub Actions
 
 1. Fork or upload this repository to your own GitHub account.
-2. Make sure `build-linuxium.sh`, `wallpaper.png`, and `.github/workflows/build-iso.yml` are in the repository.
+2. Make sure `build-linuxium.sh`, `wallpaper.png`, `lynx.png`, `grub-bg.png`, and `.github/workflows/build-iso.yml` are in the repository.
 3. Open the **Actions** tab, choose **Build Linuxium ISO**, and click **Run workflow**.
 4. When the run finishes, download the ISO from the **Artifacts** section of the run.
 
@@ -193,9 +193,12 @@ You need a Debian 12 or Ubuntu system (a virtual machine is fine), root access w
 ```bash
 git clone https://github.com/YOUR-USERNAME/linuxium.git
 cd linuxium
-chmod +x build-linuxium.sh
-./build-linuxium.sh ./wallpaper.png
+./build-linuxium.sh
 ```
+
+(All three images have defaults in the repository — `wallpaper.png`,
+`lynx.png`, and `grub-bg.png` — so no arguments are needed. Pass image
+paths as arguments to use your own.)
 
 When the build finishes, the ISO is located at:
 
@@ -245,11 +248,15 @@ Everything about Linuxium is controlled by `build-linuxium.sh`, so customizing i
 ```
 linuxium/
 ├── build-linuxium.sh              # Main build script (creates the live-build config and builds the ISO)
-├── wallpaper.png                  # Tux wallpaper used on the desktop and login screen
+├── wallpaper.png                  # Wallpaper used on the desktop and login screen
+├── lynx.png                       # Linuxium logo (boot splash, Neofetch, installer)
+├── grub-bg.png                    # Boot-menu background
 ├── README.md                      # This file
+├── index.html / forums.html       # Project website (with style.css)
 └── .github/
     └── workflows/
-        └── build-iso.yml          # Cloud build workflow for GitHub Actions
+        ├── build-iso.yml          # Cloud build workflow for GitHub Actions
+        └── checksum.yml           # Publishes SHA256SUMS after a successful build
 ```
 
 When the script runs, it generates a working folder, `linuxium-build/`, that contains the live-build configuration (package lists, included files, and hooks) and the finished ISO.
@@ -259,24 +266,21 @@ When the script runs, it generates a working folder, `linuxium-build/`, that con
 ## Known limitations
 
 - Linuxium is an early, hobby-level project and has not been widely tested on real hardware.
-- **Secure Boot is not supported.** You may need to disable Secure Boot in your firmware settings to boot the ISO.
-- The installer is the standard Debian installer, which works well but has a more traditional look than the Calamares installer used by some other distributions.
 - Only 64-bit x86 computers are supported.
-- The boot menu still uses default Debian-style graphics.
 - There is no custom icon set or theme yet, only the default Cinnamon look with a dark variant.
 
 ---
 
 ## Roadmap
 
-- [ ] Custom Linuxium logo and icon
-- [ ] Custom boot menu and splash screen
-- [ ] Calamares graphical installer
+- [x] Custom Linuxium logo and icon
+- [x] Custom boot menu and splash screen
+- [x] Calamares graphical installer
 - [ ] Custom theme and icon pack
-- [ ] Welcome app for first-run setup
-- [ ] Secure Boot support
+- [x] Welcome app for first-run setup
+- [x] Secure Boot support
 - [ ] Automated tests that boot the ISO in a virtual machine
-- [ ] Official releases and checksums
+- [x] Official releases and checksums
 
 ---
 
