@@ -37,10 +37,16 @@ set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 
 LINUXIUM_VERSION="1.1"
-WALLPAPER="${1:-./wallpaper.png}"
-LOGO="${2:-./lynx.png}"
-GRUB_BG="${3:-./grub-bg.png}"
-EXTRA_WALLPAPERS_DIR="${4:-./wallpapers}"
+# Resolve the script's own directory first: the default images, the extra
+# wallpapers folder, the download cache and the build tree all live next
+# to the script, NOT in whatever directory the caller happens to be in.
+# (Previously, running /path/to/build-linuxium.sh from another directory
+# died with "File not found: ./wallpaper.png" on its own shipped files.)
+SCRIPT_DIR="$(dirname -- "$(realpath -- "${BASH_SOURCE[0]}")")"
+WALLPAPER="${1:-$SCRIPT_DIR/wallpaper.png}"
+LOGO="${2:-$SCRIPT_DIR/lynx.png}"
+GRUB_BG="${3:-$SCRIPT_DIR/grub-bg.png}"
+EXTRA_WALLPAPERS_DIR="${4:-$SCRIPT_DIR/wallpapers}"
 WORK="linuxium-build"
 
 if [ "$(id -u)" -eq 0 ]; then SUDO=(); else SUDO=(sudo); fi
@@ -83,8 +89,12 @@ GRUB_BG="$(realpath "$GRUB_BG")"
 EXTRA_WALLPAPERS_DIR="$(realpath -m "$EXTRA_WALLPAPERS_DIR")"
 # Downloaded wallpaper sources are cached OUTSIDE the build tree so that
 # local rebuilds do not re-download them every time.
-DOWNLOAD_CACHE="$(realpath -m "./wallpapers-extra-downloads")"
+DOWNLOAD_CACHE="$SCRIPT_DIR/wallpapers-extra-downloads"
 mkdir -p "$DOWNLOAD_CACHE"
+# From here on, relative paths (the build tree, live-build's config/) are
+# anchored at the script's directory. Any user-supplied paths above were
+# already made absolute with realpath, so this loses nothing.
+cd "$SCRIPT_DIR"
 
 # 1. Build tools
 # IMPORTANT: do not use --no-install-recommends here. In Debian 12,
@@ -1206,7 +1216,15 @@ prepare_main_copy()
 		if ! awk -v block_begin="$BLOCK_BEGIN" -v block_end="$BLOCK_END" '
 			$0 == block_begin { skip = 1; next }
 			skip && $0 == block_end { skip = 0; next }
-			!skip { print }
+			!skip { lines[++n] = $0 }
+			END {
+				# Drop trailing blank lines too: write_main_override adds
+				# one blank separator before the block, and stripping only
+				# the block would leave it behind, growing the file by a
+				# blank line on every VM/non-VM transition.
+				while (n > 0 && lines[n] == "") n--
+				for (i = 1; i <= n; i++) print lines[i]
+			}
 		' "$MAIN_CONF" > "$TMP_MAIN" 2>/dev/null
 		then
 			cleanup_tmp_main

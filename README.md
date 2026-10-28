@@ -256,7 +256,9 @@ linuxium/
 └── .github/
     └── workflows/
         ├── build-iso.yml          # Cloud build workflow for GitHub Actions
-        └── checksum.yml           # Publishes SHA256SUMS after a successful build
+        ├── checksum.yml           # Publishes SHA256SUMS after a successful build
+        ├── lint.yml               # ShellCheck/YAML lint for the script and workflows
+        └── boot-test.yml          # Manually boot an ISO in QEMU and screenshot it
 ```
 
 When the script runs, it generates a working folder, `linuxium-build/`, that contains the live-build configuration (package lists, included files, and hooks) and the finished ISO.
@@ -279,7 +281,7 @@ When the script runs, it generates a working folder, `linuxium-build/`, that con
 - [ ] Custom theme and icon pack
 - [x] Welcome app for first-run setup
 - [x] Secure Boot support
-- [ ] Automated tests that boot the ISO in a virtual machine
+- [x] Automated tests that boot the ISO in a virtual machine (manual **Boot-test ISO in QEMU** workflow: boots the ISO and fails on a black screen)
 - [x] Official releases and checksums
 
 ---
