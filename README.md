@@ -135,7 +135,7 @@ Because building an ISO needs a full Linux environment and a lot of disk space, 
 | Display | X.org | Draws graphics on screen |
 | Login | LightDM + GTK greeter | Login screen |
 | Desktop | Cinnamon (Muffin, Nemo) | The user interface |
-| Icons | Marwaita OSX Dark (GPL-3.0) | Default icon theme, inherited via Marwaita-Dark → Marwaita |
+| Theme | CBlack (LGPL-3.0) | Default Cinnamon shell + GTK theme, vendored in `themes/CBlack/` |
 | Audio | PipeWire + WirePlumber | Sound |
 | Network | NetworkManager | Wi-Fi and Ethernet |
 | Browser | Firefox ESR | Web browsing |
@@ -252,6 +252,7 @@ linuxium/
 ├── wallpaper.png                  # Wallpaper used on the desktop and login screen
 ├── lynx.png                       # Linuxium logo (boot splash, Neofetch, installer)
 ├── grub-bg.png                    # Boot-menu background
+├── themes/CBlack/                 # CBlack theme pack (default shell + GTK theme)
 ├── README.md                      # This file
 ├── index.html / forums.html       # Project website (with style.css)
 └── .github/
@@ -270,7 +271,7 @@ When the script runs, it generates a working folder, `linuxium-build/`, that con
 
 - Linuxium is an early, hobby-level project and has not been widely tested on real hardware.
 - Only 64-bit x86 computers are supported.
-- There is no custom Cinnamon shell theme yet. The icon pack is now Marwaita OSX Dark (downloaded at build time from a pinned commit of [darkomarko42/Marwaita-Icons](https://github.com/darkomarko42/Marwaita-Icons), GPL-3.0, selected as Cinnamon's default icon theme); if that download is unavailable at build time, the image falls back to Cinnamon's stock icons.
+- There is no custom icon set yet (stock Cinnamon icons). The desktop theme is **CBlack** (by cloweling, LGPL-3.0), vendored under `themes/CBlack/` and set as the default Cinnamon shell + GTK theme. A handful of asset references inside CBlack's CSS point at files the upstream pack does not contain; those elements simply render without that background image.
 
 ---
 
@@ -279,7 +280,7 @@ When the script runs, it generates a working folder, `linuxium-build/`, that con
 - [x] Custom Linuxium logo and icon
 - [x] Custom boot menu and splash screen
 - [x] Calamares graphical installer
-- [ ] Custom theme and icon pack (icon pack done: Marwaita OSX Dark; shell theme still to do)
+- [ ] Custom theme and icon pack (theme done: CBlack; icon pack still to do)
 - [x] Welcome app for first-run setup
 - [x] Secure Boot support
 - [x] Automated tests that boot the ISO in a virtual machine (manual **Boot-test ISO in QEMU** workflow: boots the ISO and fails on a black screen)
@@ -298,7 +299,7 @@ Linuxium would not exist without the work of many open-source communities. Thank
 - The **live-build** and **debootstrap** maintainers for the tools used to build the ISO.
 - The **LightDM**, **PipeWire**, **NetworkManager**, **Firefox**, **LibreOffice**, and **VLC** projects.
 - **Tux**, the Linux mascot, originally drawn by Larry Ewing.
-- **darkomarko42** for the [Marwaita icon pack](https://github.com/darkomarko42/Marwaita-Icons) (GPL-3.0), Linuxium's default icon theme.
+- **cloweling** for the [CBlack theme](https://cinnamon-spices.linuxmint.com/themes/view/CBlack) (LGPL-3.0), Linuxium's default shell and GTK theme.
 
 ---
 
