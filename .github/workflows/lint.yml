@@ -9,11 +9,13 @@ on:
     branches: [main]
     paths:
       - "build-linuxium.sh"
+      - "themes/**"
       - ".github/workflows/*.yml"
       - ".github/dependabot.yml"
   pull_request:
     paths:
       - "build-linuxium.sh"
+      - "themes/**"
       - ".github/workflows/*.yml"
       - ".github/dependabot.yml"
 
@@ -51,10 +53,17 @@ jobs:
           # actionlint exit with a usage error and lint nothing.
           args: -no-color
 
-      - name: Verify the build script's default images exist
+      - name: Verify the build script's bundled assets exist
         run: |
           # The defaults in build-linuxium.sh must be files in this repo,
           # or a no-argument local build dies on the file check.
           for f in wallpaper.png lynx.png grub-bg.png; do
             test -f "$f" || { echo "ERROR: default image $f missing from repo" >&2; exit 1; }
+          done
+          # Same for the vendored CBlack theme (themes/CBlack): the build
+          # script fails early if its CSS entry points are missing.
+          for f in themes/CBlack/index.theme \
+                   themes/CBlack/cinnamon/cinnamon.css \
+                   themes/CBlack/gtk-3.0/gtk.css; do
+            test -s "$f" || { echo "ERROR: bundled theme file $f missing or empty" >&2; exit 1; }
           done

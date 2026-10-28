@@ -1153,6 +1153,13 @@ gtk-theme='CBlack'
 # left unset.
 [org/cinnamon/theme]
 name='CBlack'
+
+# Window borders (Muffin/Metacity) are a THIRD, separate setting in
+# Cinnamon - without this the titlebars stay on the default Adwaita
+# borders while the shell and apps use CBlack. CBlack ships a
+# metacity-1 theme (its index.theme declares MetacityTheme=CBlack).
+[org/cinnamon/desktop/wm/preferences]
+theme='CBlack'
 EOF
 
 # 7. Login screen background
@@ -1161,6 +1168,9 @@ cat > config/includes.chroot/etc/lightdm/lightdm-gtk-greeter.conf.d/50-linuxium.
 [greeter]
 background=/usr/share/backgrounds/linuxium/linuxium.png
 user-background=false
+# Match the session theme (section 5j/6); dconf defaults do not apply
+# to the greeter's own user, so set its GTK theme here explicitly.
+theme-name=CBlack
 # Put the login window on the monitor that actually has the pointer;
 # harmless on one screen, avoids an "empty" looking second screen in VMs.
 active-monitor=#cursor
