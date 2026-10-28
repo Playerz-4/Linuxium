@@ -1082,6 +1082,50 @@ Acceleration -> Paravirtualization Interface to None (or Legacy) while
 using that entry, or simply boot Live and use Install Linuxium.
 EOF
 
+# 5j. OS theme: CBlack (by cloweling, LGPL-3.0; based on Linux Mint's
+#     dark theme) - a Cinnamon shell theme AND a GTK2/GTK3 + Metacity
+#     window theme. It is the theme pack the project adopted, vendored
+#     into this repository at themes/CBlack (from the canonical
+#     cinnamon-spices-themes repo, commit 5a98cccb) so builds do not
+#     depend on a build-time download. Both halves are required:
+#     cinnamon/cinnamon.css is what Cinnamon's shell loads, and
+#     gtk-3.0/gtk.css (+ gtk-2.0, metacity-1) themes application
+#     windows. Selected by default in section 6.
+THEME_NAME="CBlack"
+THEME_SRC="$SCRIPT_DIR/themes/$THEME_NAME"
+for theme_file in "cinnamon/cinnamon.css" "gtk-3.0/gtk.css" "index.theme"; do
+  if [ ! -s "$THEME_SRC/$theme_file" ]; then
+    echo "ERROR: bundled $THEME_NAME theme is incomplete: $THEME_SRC/$theme_file missing or empty" >&2
+    exit 1
+  fi
+done
+mkdir -p config/includes.chroot/usr/share/themes
+rm -rf "config/includes.chroot/usr/share/themes/$THEME_NAME"
+cp -a "$THEME_SRC" "config/includes.chroot/usr/share/themes/$THEME_NAME"
+THEME_DOC="config/includes.chroot/usr/share/doc/linuxium-theme-cblack"
+mkdir -p "$THEME_DOC"
+cat > "$THEME_DOC/CREDITS.txt" <<'EOF'
+Linuxium default theme: CBlack
+
+Author:  cloweling
+Source:  https://cinnamon-spices.linuxmint.com/themes/view/CBlack
+         (canonical repo: linuxmint/cinnamon-spices-themes, folder
+          CBlack/files/CBlack, vendored in this repository under
+          themes/CBlack so ISO builds need no theme download)
+License: LGPL-3.0
+
+CBlack is based on Linux Mint's dark theme and provides the Cinnamon
+shell theme (cinnamon/), GTK 2/3 window themes (gtk-2.0/, gtk-3.0/),
+a Metacity theme (metacity-1/) and an Xfwm4 theme (xfwm4/).
+
+Known upstream issue (present in the pack as shipped, left as-is):
+cinnamon.css references common-assets/checkbox/*.svg and gtk.css
+references assets/thumbnail-frame.png, neither of which exists in
+the pack. Those few elements simply render without that background
+image; everything else is unaffected.
+EOF
+echo "Theme installed: $THEME_NAME (Cinnamon shell + GTK, from themes/$THEME_NAME)"
+
 # 6. Default settings: Cinnamon wallpaper via system-wide dconf defaults
 mkdir -p config/includes.chroot/etc/dconf/profile
 mkdir -p config/includes.chroot/etc/dconf/db/local.d
@@ -1100,12 +1144,15 @@ secondary-color='#525252'
 color-shading-type='solid'
 
 [org/cinnamon/desktop/interface]
-gtk-theme='Adwaita-dark'
+gtk-theme='CBlack'
 
-# Deliberately do NOT set [org/cinnamon/theme] name='Adwaita' here.
-# Adwaita is a GTK/window theme; it does not ship a Cinnamon shell theme
-# (no cinnamon/cinnamon.css). Leaving the key unset uses Cinnamon's
-# built-in shell theme, which always exists.
+# Cinnamon SHELL theme. This key is only safe to set because CBlack
+# (section 5j) really ships cinnamon/cinnamon.css - pointing it at a
+# GTK-only theme such as Adwaita (which has no cinnamon/cinnamon.css)
+# would leave the shell unthemed/broken, which is why this used to be
+# left unset.
+[org/cinnamon/theme]
+name='CBlack'
 EOF
 
 # 7. Login screen background
@@ -1780,6 +1827,9 @@ if [ -f binary/live/filesystem.squashfs ]; then
     "/usr/share/initramfs-tools/hooks/cryptroot" \
     "/usr/share/plymouth/themes/linuxium/linuxium.plymouth" \
     "/usr/share/plymouth/themes/linuxium/linuxium.script" \
+    "/usr/share/themes/CBlack/index.theme" \
+    "/usr/share/themes/CBlack/cinnamon/cinnamon.css" \
+    "/usr/share/themes/CBlack/gtk-3.0/gtk.css" \
     "/boot/vmlinuz-" "/boot/initrd.img-"; do
     if ! grep -Fq "$root_part" <<<"$ROOTFS_LISTING"; then
       echo "ERROR: '$root_part' is missing from the live root filesystem" >&2
