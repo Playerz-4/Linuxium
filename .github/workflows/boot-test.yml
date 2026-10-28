@@ -1,0 +1,106 @@
+name: Boot-test ISO in QEMU
+
+# Manually-boot a built ISO in QEMU and capture a screenshot of whatever
+# is on screen after a wait, so "the ISO builds" can become "the ISO
+# boots to a desktop". Manual-only on purpose: GitHub runners have no
+# KVM, so QEMU uses slow software emulation and this takes minutes.
+# It never runs automatically and cannot affect the build/release flow.
+
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "ID of the Build Linuxium ISO run to test"
+        type: string
+        required: true
+      wait_seconds:
+        description: "Seconds to let the VM boot before the screenshot"
+        type: string
+        required: false
+        default: "240"
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: linuxium-boot-test
+  cancel-in-progress: true
+
+jobs:
+  boot-test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Download the ISO from the build run
+        uses: actions/download-artifact@v5
+        with:
+          name: linuxium-iso
+          path: iso
+          run-id: ${{ inputs.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install QEMU and tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y qemu-system-x86 qemu-utils socat imagemagick
+
+      - name: Boot the ISO and capture a screenshot
+        run: |
+          set -euo pipefail
+          iso_file="$(ls iso/*.iso)"
+          echo "Booting: $iso_file"
+          # BIOS boot (matches the ISOLINUX path); software emulation only.
+          qemu-system-x86_64 \
+            -m 3072 -smp 2 \
+            -cdrom "$iso_file" -boot d \
+            -display none \
+            -monitor unix:/tmp/qemu-monitor,server,nowait \
+            -serial file:serial.log \
+            > qemu.log 2>&1 &
+          echo $! > qemu.pid
+
+          wait_s="${{ inputs.wait_seconds }}"
+          case "$wait_s" in
+            ''|*[!0-9]*) echo "wait_seconds must be a number, got: $wait_s" >&2; exit 1 ;;
+          esac
+          echo "Waiting ${wait_s}s for the VM to boot..."
+          sleep "$wait_s"
+
+          if ! kill -0 "$(cat qemu.pid)" 2>/dev/null; then
+            echo "ERROR: QEMU exited early" >&2
+            cat qemu.log >&2 || true
+            exit 1
+          fi
+
+          echo "screendump $PWD/screenshot.ppm" | socat - UNIX-CONNECT:/tmp/qemu-monitor
+          echo "quit" | socat - UNIX-CONNECT:/tmp/qemu-monitor || true
+          test -s screenshot.ppm
+          convert screenshot.ppm screenshot.png
+
+          # A kernel panic / black screen is (nearly) uniformly dark; a
+          # boot menu, splash or desktop is not. Fail loudly if the frame
+          # looks dead so a red run actually means "did not boot".
+          mean="$(convert screenshot.png -colorspace Gray -format '%[fx:mean]' info:)"
+          echo "Screenshot mean brightness: $mean"
+          python3 - "$mean" <<'PYEOF'
+          import sys
+          mean = float(sys.argv[1])
+          if mean < 0.02:
+              print("ERROR: screenshot is almost completely black - the ISO likely did not boot to graphics", file=sys.stderr)
+              sys.exit(1)
+          print("Screenshot looks alive (not a black screen).")
+          PYEOF
+          ls -lh screenshot.png
+
+      - name: Upload screenshot and logs
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: linuxium-boot-test
+          path: |
+            screenshot.png
+            qemu.log
+            serial.log
+          if-no-files-found: ignore
+          retention-days: 14
