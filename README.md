@@ -135,7 +135,6 @@ Because building an ISO needs a full Linux environment and a lot of disk space, 
 | Display | X.org | Draws graphics on screen |
 | Login | LightDM + GTK greeter | Login screen |
 | Desktop | Cinnamon (Muffin, Nemo) | The user interface |
-| Icons | Marwaita OSX Dark (GPL-3.0) | Default icon theme, inherited via Marwaita-Dark → Marwaita |
 | Audio | PipeWire + WirePlumber | Sound |
 | Network | NetworkManager | Wi-Fi and Ethernet |
 | Browser | Firefox ESR | Web browsing |
@@ -270,7 +269,7 @@ When the script runs, it generates a working folder, `linuxium-build/`, that con
 
 - Linuxium is an early, hobby-level project and has not been widely tested on real hardware.
 - Only 64-bit x86 computers are supported.
-- There is no custom Cinnamon shell theme yet. The icon pack is now Marwaita OSX Dark (downloaded at build time from a pinned commit of [darkomarko42/Marwaita-Icons](https://github.com/darkomarko42/Marwaita-Icons), GPL-3.0, selected as Cinnamon's default icon theme); if that download is unavailable at build time, the image falls back to Cinnamon's stock icons.
+- There is no custom icon set or theme yet, only the default Cinnamon look with a dark variant.
 
 ---
 
@@ -279,7 +278,7 @@ When the script runs, it generates a working folder, `linuxium-build/`, that con
 - [x] Custom Linuxium logo and icon
 - [x] Custom boot menu and splash screen
 - [x] Calamares graphical installer
-- [ ] Custom theme and icon pack (icon pack done: Marwaita OSX Dark; shell theme still to do)
+- [ ] Custom theme and icon pack
 - [x] Welcome app for first-run setup
 - [x] Secure Boot support
 - [x] Automated tests that boot the ISO in a virtual machine (manual **Boot-test ISO in QEMU** workflow: boots the ISO and fails on a black screen)
@@ -298,7 +297,6 @@ Linuxium would not exist without the work of many open-source communities. Thank
 - The **live-build** and **debootstrap** maintainers for the tools used to build the ISO.
 - The **LightDM**, **PipeWire**, **NetworkManager**, **Firefox**, **LibreOffice**, and **VLC** projects.
 - **Tux**, the Linux mascot, originally drawn by Larry Ewing.
-- **darkomarko42** for the [Marwaita icon pack](https://github.com/darkomarko42/Marwaita-Icons) (GPL-3.0), Linuxium's default icon theme.
 
 ---
 

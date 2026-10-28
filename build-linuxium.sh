@@ -274,8 +274,6 @@ spice-vdagent
 plymouth
 plymouth-themes
 plymouth-label
-# Generates icon-theme caches for the bundled Marwaita icon pack (5i/9)
-gtk-update-icon-cache
 neofetch
 chafa
 # Neofetch's chafa backend still needs ImageMagick's convert/identify
@@ -1084,78 +1082,6 @@ Acceleration -> Paravirtualization Interface to None (or Legacy) while
 using that entry, or simply boot Live and use Install Linuxium.
 EOF
 
-# 5i. Icon pack: "Marwaita icons OSX Dark" (darkomarko42/Marwaita-Icons,
-#     GPL-3.0). That theme is a thin variant whose index.theme is
-#     Inherits=Marwaita-Dark, which in turn Inherits=Marwaita - and the
-#     actual icons live in the base Marwaita tree. All THREE directories
-#     must be installed or most icons silently fall back to Adwaita.
-#     Downloaded from a pinned commit (reproducible; ~3 MB compressed)
-#     and cached like the wallpapers. If the download is unavailable the
-#     build continues without it and Cinnamon keeps its default icons
-#     (the dconf default in section 6 is only written when the pack was
-#     really installed).
-MARWAITA_COMMIT="15e94638fe4d8cd3de2453d69a57fdbc440c1315"
-MARWAITA_TARBALL="$DOWNLOAD_CACHE/marwaita-icons-${MARWAITA_COMMIT}.tar.gz"
-MARWAITA_URL="https://codeload.github.com/darkomarko42/Marwaita-Icons/tar.gz/${MARWAITA_COMMIT}"
-ICON_THEME_NAME="Marwaita icons OSX Dark"
-ICON_THEME_INSTALLED=""
-ICONS_DIR="config/includes.chroot/usr/share/icons"
-mkdir -p "$ICONS_DIR"
-
-if [ ! -s "$MARWAITA_TARBALL" ]; then
-  echo "Downloading Marwaita icon pack (commit ${MARWAITA_COMMIT})"
-  if ! curl -fL --retry 3 --connect-timeout 20 \
-       -A "Linuxium/${LINUXIUM_VERSION} build script (icon pack download)" \
-       -o "$MARWAITA_TARBALL.part" "$MARWAITA_URL"; then
-    echo "WARNING: could not download $MARWAITA_URL - building without the Marwaita icon pack" >&2
-    rm -f "$MARWAITA_TARBALL.part"
-  else
-    mv "$MARWAITA_TARBALL.part" "$MARWAITA_TARBALL"
-  fi
-fi
-
-if [ -s "$MARWAITA_TARBALL" ]; then
-  if ! tar tzf "$MARWAITA_TARBALL" >/dev/null 2>&1; then
-    echo "WARNING: $MARWAITA_TARBALL is not a readable tarball - deleting it and building without the icon pack" >&2
-    rm -f "$MARWAITA_TARBALL"
-  else
-    ICON_TMP="$(mktemp -d)"
-    tar -xzf "$MARWAITA_TARBALL" -C "$ICON_TMP"
-    ICON_SRC=""
-    for d in "$ICON_TMP"/*/; do
-      if [ -f "$d/Marwaita/index.theme" ]; then ICON_SRC="$d"; break; fi
-    done
-    if [ -z "$ICON_SRC" ] \
-       || [ ! -f "$ICON_SRC/$ICON_THEME_NAME/index.theme" ] \
-       || [ ! -f "$ICON_SRC/Marwaita-Dark/index.theme" ]; then
-      echo "WARNING: Marwaita tarball does not contain the expected theme directories - building without the icon pack" >&2
-    else
-      for theme in "Marwaita" "Marwaita-Dark" "$ICON_THEME_NAME"; do
-        rm -rf "${ICONS_DIR:?}/$theme"
-        cp -a "$ICON_SRC/$theme" "$ICONS_DIR/$theme"
-      done
-      # License + credit travel with the pack (GPL-3.0).
-      ICON_DOC="config/includes.chroot/usr/share/doc/linuxium-icon-theme"
-      mkdir -p "$ICON_DOC"
-      cp -a "$ICON_SRC/LICENSE" "$ICON_DOC/LICENSE" 2>/dev/null || true
-      cat > "$ICON_DOC/CREDITS.txt" <<EOF
-Linuxium icon theme: "Marwaita icons OSX Dark"
-(inherits Marwaita-Dark, which inherits Marwaita)
-
-Source:  https://github.com/darkomarko42/Marwaita-Icons
-Commit:  ${MARWAITA_COMMIT}
-License: GPL-3.0 (see LICENSE in this directory, when present)
-
-Installed by build-linuxium.sh into /usr/share/icons/ and selected as
-the default Cinnamon icon theme.
-EOF
-      ICON_THEME_INSTALLED="yes"
-      echo "Icon pack installed: $ICON_THEME_NAME (+ Marwaita-Dark, Marwaita)"
-    fi
-    rm -rf "$ICON_TMP"
-  fi
-fi
-
 # 6. Default settings: Cinnamon wallpaper via system-wide dconf defaults
 mkdir -p config/includes.chroot/etc/dconf/profile
 mkdir -p config/includes.chroot/etc/dconf/db/local.d
@@ -1181,15 +1107,6 @@ gtk-theme='Adwaita-dark'
 # (no cinnamon/cinnamon.css). Leaving the key unset uses Cinnamon's
 # built-in shell theme, which always exists.
 EOF
-
-# Default icon theme - ONLY when the Marwaita pack was really installed
-# in section 5i. Pointing Cinnamon at a theme that is not on disk would
-# leave users with broken/missing icons everywhere.
-if [ -n "$ICON_THEME_INSTALLED" ]; then
-  sed -i "/^gtk-theme=/a icon-theme='$ICON_THEME_NAME'" \
-    config/includes.chroot/etc/dconf/db/local.d/00-linuxium
-  echo "Default Cinnamon icon theme: $ICON_THEME_NAME"
-fi
 
 # 7. Login screen background
 mkdir -p config/includes.chroot/etc/lightdm/lightdm-gtk-greeter.conf.d
@@ -1679,18 +1596,6 @@ set -e
 # Compile the dconf defaults
 dconf update
 
-# Icon caches for the bundled Marwaita pack (copied in as plain files, so
-# no package trigger will do this). A missing cache is not fatal - GTK
-# falls back to scanning the directories - so never fail the build here.
-if command -v gtk-update-icon-cache >/dev/null 2>&1; then
-  for theme in "Marwaita" "Marwaita-Dark" "Marwaita icons OSX Dark"; do
-    if [ -d "/usr/share/icons/$theme" ]; then
-      gtk-update-icon-cache -f -t "/usr/share/icons/$theme" 2>/dev/null \
-        || echo "WARNING: icon cache failed for $theme (non-fatal)" >&2
-    fi
-  done
-fi
-
 # Branding (ID stays "debian" so tools - including Debian's signed GRUB
 # and the Calamares helpers, which look for the "bookworm" release -
 # keep working)
@@ -1881,20 +1786,6 @@ if [ -f binary/live/filesystem.squashfs ]; then
       exit 1
     fi
   done
-  # Icon pack: only required when section 5i actually installed it (a
-  # failed download degrades to stock icons instead of failing here).
-  if [ -n "$ICON_THEME_INSTALLED" ]; then
-    for icon_part in \
-      "/usr/share/icons/Marwaita/index.theme" \
-      "/usr/share/icons/Marwaita-Dark/index.theme" \
-      "/usr/share/icons/Marwaita icons OSX Dark/index.theme"; do
-      if ! grep -Fq "$icon_part" <<<"$ROOTFS_LISTING"; then
-        echo "ERROR: '$icon_part' is missing from the live root filesystem" >&2
-        exit 1
-      fi
-    done
-    echo "Icon pack check: OK"
-  fi
   echo "Live root filesystem boot-component check: OK"
 else
   echo "ERROR: binary/live/filesystem.squashfs not found after build; cannot verify the live root filesystem" >&2
