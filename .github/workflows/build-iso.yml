@@ -42,7 +42,7 @@ jobs:
     timeout-minutes: 180
     steps:
       - name: Check out repository
-        uses: actions/checkout@v5
+        uses: actions/checkout@v7
 
       - name: Free up disk space (a full live build needs it)
         run: |
