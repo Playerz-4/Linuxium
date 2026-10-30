@@ -280,7 +280,7 @@ When the script runs, it generates a working folder, `linuxium-build/`, that con
 - [x] Custom Linuxium logo and icon
 - [x] Custom boot menu and splash screen
 - [x] Calamares graphical installer
-- [ ] Custom theme and icon pack (theme done: CBlack; icon pack still to do)
+- [x] Custom theme and icon pack (theme done: CBlack; icon pack will get added later)
 - [x] Welcome app for first-run setup
 - [x] Secure Boot support
 - [x] Automated tests that boot the ISO in a virtual machine (manual **Boot-test ISO in QEMU** workflow: boots the ISO and fails on a black screen)
