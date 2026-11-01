@@ -64,6 +64,15 @@ jobs:
           # script fails early if its CSS entry points are missing.
           for f in themes/CBlack/index.theme \
                    themes/CBlack/cinnamon/cinnamon.css \
-                   themes/CBlack/gtk-3.0/gtk.css; do
+                   themes/CBlack/gtk-3.0/gtk.css \
+                   themes/CBlack/metacity-1/metacity-theme-2.xml \
+                   themes/CBlack/metacity-1/metacity-theme-3.xml; do
             test -s "$f" || { echo "ERROR: bundled theme file $f missing or empty" >&2; exit 1; }
           done
+          python3 - <<'PYEOF'
+          import pathlib
+          import xml.etree.ElementTree as ET
+          for p in sorted(pathlib.Path("themes/CBlack").rglob("*")):
+              if p.suffix in (".xml", ".svg"):
+                  ET.parse(p)
+          PYEOF

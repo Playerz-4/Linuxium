@@ -186,6 +186,7 @@ libgl1-mesa-dri
 cinnamon-desktop-environment
 lightdm
 lightdm-gtk-greeter
+dmz-cursor-theme
 nemo
 gnome-terminal
 gnome-system-monitor
@@ -301,6 +302,7 @@ live-config-systemd
 # console-setup provides setupcon/ckbcomp for console + installer use.
 user-setup
 locales
+kbd
 console-setup
 keyboard-configuration
 iproute2
@@ -441,11 +443,13 @@ mkdir -p config/includes.chroot/usr/share/linuxium config/includes.chroot/usr/sh
 "${IM[@]}" "$LOGO" -auto-orient -resize 512x512 -strip \
   "PNG32:config/includes.chroot/usr/share/pixmaps/linuxium.png"
 
-# 5e. Boot splash (Plymouth theme using the logo)
+# 5e. Boot splash (Plymouth theme using the logo + animated progress bar)
 PLY_DIR="config/includes.chroot/usr/share/plymouth/themes/linuxium"
 mkdir -p "$PLY_DIR"
 "${IM[@]}" "$LOGO" -auto-orient -background white -alpha remove -alpha off \
   -resize 256x256 -strip "PNG24:$PLY_DIR/logo.png"
+"${IM[@]}" -size 192x4 xc:'#e5e7eb' -strip "PNG24:$PLY_DIR/progress-track.png"
+"${IM[@]}" -size 56x4 xc:'#20242a' -strip "PNG24:$PLY_DIR/progress-bar.png"
 
 cat > "$PLY_DIR/linuxium.plymouth" <<'EOF'
 [Plymouth Theme]
@@ -468,8 +472,23 @@ Window.SetBackgroundBottomColor(1, 1, 1);
 
 logo.image = Image("logo.png");
 logo.sprite = Sprite(logo.image);
-logo.sprite.SetX(Window.GetX() + (Window.GetWidth() - logo.image.GetWidth()) / 2);
-logo.sprite.SetY(Window.GetY() + (Window.GetHeight() - logo.image.GetHeight()) / 2);
+logo.x = Window.GetX() + (Window.GetWidth() - logo.image.GetWidth()) / 2;
+logo.y = Window.GetY() + (Window.GetHeight() - logo.image.GetHeight()) / 2;
+logo.sprite.SetPosition(logo.x, logo.y, 100);
+
+track.image = Image("progress-track.png");
+track.sprite = Sprite(track.image);
+track.x = Window.GetX() + (Window.GetWidth() - track.image.GetWidth()) / 2;
+track.y = logo.y + logo.image.GetHeight() + 28;
+track.sprite.SetPosition(track.x, track.y, 101);
+
+bar.image = Image("progress-bar.png");
+bar.sprite = Sprite(bar.image);
+bar.travel = track.image.GetWidth() - bar.image.GetWidth();
+bar.sprite.SetPosition(track.x, track.y, 102);
+
+dialog_active = 0;
+tick = 0;
 
 prompt_sprite = Sprite();
 prompt_sprite.SetPosition(0, 0, 10000);
@@ -483,8 +502,28 @@ message_sprite = Sprite();
 message_sprite.SetPosition(0, 0, 10002);
 message_sprite.SetOpacity(0);
 
+fun refresh_callback()
+{
+	tick++;
+	if (dialog_active == 0)
+	{
+		track.sprite.SetOpacity(1);
+		bar.sprite.SetOpacity(1);
+		phase = (tick % 120) / 60.0;
+		if (phase > 1.0)
+			phase = 2.0 - phase;
+		bar.sprite.SetX(track.x + bar.travel * phase);
+	}
+	else
+	{
+		track.sprite.SetOpacity(0);
+		bar.sprite.SetOpacity(0);
+	}
+}
+
 fun hide_dialog()
 {
+	dialog_active = 0;
 	prompt_sprite.SetOpacity(0);
 	entry_sprite.SetOpacity(0);
 }
@@ -496,14 +535,24 @@ fun display_normal_callback()
 
 fun display_password_callback(prompt_text, bullets)
 {
+	dialog_active = 1;
+	if (!prompt_text || prompt_text == "")
+		prompt_text = "Password:";
 	prompt_image = Image.Text(prompt_text, 0, 0, 0);
-	prompt_x = Math.Max(Window.GetX(),
-		Window.GetX() + (Window.GetWidth() - prompt_image.GetWidth()) / 2);
-	prompt_y = Window.GetY() +
-		(Window.GetHeight() + logo.image.GetHeight()) / 2 + 24;
-	prompt_sprite.SetImage(prompt_image);
-	prompt_sprite.SetPosition(prompt_x, prompt_y, 10000);
-	prompt_sprite.SetOpacity(1);
+	if (prompt_image)
+	{
+		prompt_x = Math.Max(Window.GetX(),
+			Window.GetX() + (Window.GetWidth() - prompt_image.GetWidth()) / 2);
+		prompt_y = logo.y + logo.image.GetHeight() + 24;
+		prompt_sprite.SetImage(prompt_image);
+		prompt_sprite.SetPosition(prompt_x, prompt_y, 10000);
+		prompt_sprite.SetOpacity(1);
+		entry_y = prompt_y + prompt_image.GetHeight() + 8;
+	}
+	else
+	{
+		entry_y = logo.y + logo.image.GetHeight() + 48;
+	}
 
 	bullet_text = "";
 	for (bullet_index = 0; bullet_index < bullets; bullet_index++)
@@ -512,12 +561,14 @@ fun display_password_callback(prompt_text, bullets)
 	if (bullets > 0)
 	{
 		entry_image = Image.Text(bullet_text, 0, 0, 0);
-		entry_x = Math.Max(Window.GetX(),
-			Window.GetX() + (Window.GetWidth() - entry_image.GetWidth()) / 2);
-		entry_y = prompt_y + prompt_image.GetHeight() + 8;
-		entry_sprite.SetImage(entry_image);
-		entry_sprite.SetPosition(entry_x, entry_y, 10001);
-		entry_sprite.SetOpacity(1);
+		if (entry_image)
+		{
+			entry_x = Math.Max(Window.GetX(),
+				Window.GetX() + (Window.GetWidth() - entry_image.GetWidth()) / 2);
+			entry_sprite.SetImage(entry_image);
+			entry_sprite.SetPosition(entry_x, entry_y, 10001);
+			entry_sprite.SetOpacity(1);
+		}
 	}
 	else
 	{
@@ -527,26 +578,41 @@ fun display_password_callback(prompt_text, bullets)
 
 fun display_question_callback(prompt_text, entry_text)
 {
+	dialog_active = 1;
+	if (!prompt_text || prompt_text == "")
+		prompt_text = "Input:";
+	if (!entry_text)
+		entry_text = "";
 	question_image = Image.Text(prompt_text + " " + entry_text, 0, 0, 0);
-	question_x = Math.Max(Window.GetX(),
-		Window.GetX() + (Window.GetWidth() - question_image.GetWidth()) / 2);
-	question_y = Window.GetY() +
-		(Window.GetHeight() + logo.image.GetHeight()) / 2 + 24;
-	prompt_sprite.SetImage(question_image);
-	prompt_sprite.SetPosition(question_x, question_y, 10000);
-	prompt_sprite.SetOpacity(1);
+	if (question_image)
+	{
+		question_x = Math.Max(Window.GetX(),
+			Window.GetX() + (Window.GetWidth() - question_image.GetWidth()) / 2);
+		question_y = logo.y + logo.image.GetHeight() + 24;
+		prompt_sprite.SetImage(question_image);
+		prompt_sprite.SetPosition(question_x, question_y, 10000);
+		prompt_sprite.SetOpacity(1);
+	}
 	entry_sprite.SetOpacity(0);
 }
 
 fun display_message_callback(message_text)
 {
+	if (!message_text || message_text == "")
+	{
+		message_sprite.SetOpacity(0);
+		return;
+	}
 	message_image = Image.Text(message_text, 0, 0, 0);
-	message_x = Math.Max(Window.GetX(),
-		Window.GetX() + (Window.GetWidth() - message_image.GetWidth()) / 2);
-	message_y = Window.GetY() + Window.GetHeight() * 0.85;
-	message_sprite.SetImage(message_image);
-	message_sprite.SetPosition(message_x, message_y, 10002);
-	message_sprite.SetOpacity(1);
+	if (message_image)
+	{
+		message_x = Math.Max(Window.GetX(),
+			Window.GetX() + (Window.GetWidth() - message_image.GetWidth()) / 2);
+		message_y = Window.GetY() + Window.GetHeight() * 0.85;
+		message_sprite.SetImage(message_image);
+		message_sprite.SetPosition(message_x, message_y, 10002);
+		message_sprite.SetOpacity(1);
+	}
 }
 
 fun hide_message_callback(message_text)
@@ -554,6 +620,7 @@ fun hide_message_callback(message_text)
 	message_sprite.SetOpacity(0);
 }
 
+Plymouth.SetRefreshFunction(refresh_callback);
 Plymouth.SetDisplayNormalFunction(display_normal_callback);
 Plymouth.SetDisplayPasswordFunction(display_password_callback);
 Plymouth.SetDisplayQuestionFunction(display_question_callback);
@@ -1145,6 +1212,7 @@ color-shading-type='solid'
 
 [org/cinnamon/desktop/interface]
 gtk-theme='CBlack'
+cursor-theme='DMZ-Black'
 
 # Cinnamon SHELL theme. This key is only safe to set because CBlack
 # (section 5j) really ships cinnamon/cinnamon.css - pointing it at a
@@ -1169,8 +1237,10 @@ cat > config/includes.chroot/etc/lightdm/lightdm-gtk-greeter.conf.d/50-linuxium.
 background=/usr/share/backgrounds/linuxium/linuxium.png
 user-background=false
 # Match the session theme (section 5j/6); dconf defaults do not apply
-# to the greeter's own user, so set its GTK theme here explicitly.
+# to the greeter's own user, so set its GTK/icon/cursor themes explicitly.
 theme-name=CBlack
+icon-theme-name=Adwaita
+cursor-theme-name=DMZ-Black
 # Put the login window on the monitor that actually has the pointer;
 # harmless on one screen, avoids an "empty" looking second screen in VMs.
 active-monitor=#cursor
@@ -1178,6 +1248,11 @@ EOF
 
 # 8. Live user gets autologin into Cinnamon. The [LightDM] guards are
 # static on purpose: they must survive into an installed system too.
+# NOTE: logind-check-graphical=false is safe ONLY because section 8a
+# installs /etc/systemd/system/lightdm.service.d/50-linuxium.conf and
+# /usr/sbin/linuxium-wait-graphics, which order LightDM after
+# systemd-logind + udev coldplug and wait for the simpledrm -> real KMS
+# GPU handoff before Xorg probes /dev/dri/card*.
 mkdir -p config/includes.chroot/etc/lightdm/lightdm.conf.d
 cat > config/includes.chroot/etc/lightdm/lightdm.conf.d/50-linuxium.conf <<'EOF'
 [LightDM]
@@ -1189,43 +1264,195 @@ greeter-session=lightdm-gtk-greeter
 user-session=cinnamon
 EOF
 
-# 8a. Permanent VM graphics safeguards (present in the live image AND in
-# an installed system). Earlier builds put the VirtualBox workarounds only
-# in the live overlay, so a system that looked fine live could black-screen
-# again on its first installed boot. Two small, narrow pieces fix that:
+# 8a. Permanent boot/graphics safeguards (present in the live image AND
+# in an installed system):
 #
-#  1. A static Xorg OutputClass that binds X to the generic modesetting
-#     driver ONLY when the kernel DRM driver is vmwgfx or vboxvideo.
-#     Because Xorg does the matching when it starts, this has none of the
-#     "has udev created the DRM card yet?" timing race of detecting the
-#     GPU from an early-boot script. It also overrides the legacy
-#     xf86-video-vmware autoload decision without touching real hardware.
+#  1. Early-boot graphics readiness + LightDM systemd drop-in:
+#     Bookworm's lightdm.service has Conflicts=plymouth-quit.service (so
+#     systemd cancels plymouth-quit.service and leaves plymouth-quit-wait
+#     waiting forever unless LightDM transitions or fails), lacks
+#     After=systemd-logind.service (so an early SeatNew failure in
+#     lightdm.c:login1_service_seat_added_cb is ignored and freezes on
+#     the Plymouth splash forever), and uses RestartSec=100ms (so 5 Xorg
+#     probes during kernel simpledrm -> real KMS GPU handoff burn out in
+#     500ms and strand the console on VT7 via -novtswitch). Ordering
+#     LightDM after systemd-logind, waiting in a bounded ExecStartPre
+#     helper for udev + KMS handoff, spacing retries to 2s, and adding an
+#     OnFailure VT1 fallback eliminates all of those splash hangs while
+#     preserving non-KMS / nomodeset bootability.
 #
-#  2. A tiny oneshot service that runs before LightDM every boot and
+#  2. A narrow Xorg OutputClass for VirtualBox's legacy vboxvideo KMS
+#     driver (which has no dedicated Xorg DDX in Bookworm) using
+#     ShadowFB without Glamor/PageFlip stalls. Crucially, do NOT force
+#     modesetting onto vmwgfx: xserver-xorg-video-vmware provides the
+#     native vmwgfx Xorg backend for both VMware and VirtualBox VMSVGA,
+#     whereas forcing modesetting + glamor + PageFlip onto vmwgfx causes
+#     black screens / splash hangs.
+#
+#  3. A tiny oneshot service that runs before LightDM every boot and
 #     selects Cinnamon's software-rendering session when (and only when)
-#     systemd/DMI say this is VirtualBox. It maintains a clearly-marked
-#     final block in /etc/lightdm/lightdm.conf because LightDM reads that
-#     file *after* lightdm.conf.d/*.conf, and Calamares writes the normal
-#     3D session there during installation. It removes only its own block
-#     on non-VirtualBox boots, and always exits 0.
+#     systemd/DMI say this is VirtualBox.
+mkdir -p config/includes.chroot/usr/sbin
+cat > config/includes.chroot/usr/sbin/linuxium-wait-graphics <<'EOF'
+#!/bin/sh
+# Linuxium: wait (with strict upper bounds) for udev GPU coldplug,
+# simpledrm -> native KMS handoff, and systemd-logind seat readiness
+# before LightDM spawns Xorg. Every code path exits 0.
+
+cmdline="$(cat /proc/cmdline 2>/dev/null || true)"
+nomodeset=0
+for param in $cmdline
+do
+	case "$param" in
+		nomodeset|*.modeset=0)
+			nomodeset=1
+			;;
+	esac
+done
+
+if command -v udevadm >/dev/null 2>&1
+then
+	udevadm settle --timeout=10 >/dev/null 2>&1 || true
+fi
+
+has_non_simpledrm_card()
+{
+	for card in /sys/class/drm/card[0-9]*
+	do
+		[ -e "$card" ] || continue
+		case "${card##*/}" in
+			*-*) continue ;;
+		esac
+		devnode="/dev/dri/${card##*/}"
+		[ -c "$devnode" ] || continue
+		drv="$(readlink "$card/device/driver" 2>/dev/null || true)"
+		drv="${drv##*/}"
+		if [ -n "$drv" ] && [ "$drv" != "simpledrm" ] && [ "$drv" != "simple-framebuffer" ]
+		then
+			return 0
+		fi
+	done
+	return 1
+}
+
+has_any_drm_card()
+{
+	for devnode in /dev/dri/card[0-9]*
+	do
+		[ -c "$devnode" ] && return 0
+	done
+	return 1
+}
+
+has_unbound_pci_display()
+{
+	for pci_class in /sys/bus/pci/devices/*/class
+	do
+		[ -r "$pci_class" ] || continue
+		cls="$(cat "$pci_class" 2>/dev/null || true)"
+		case "$cls" in
+			0x03*)
+				pci_dir="${pci_class%/class}"
+				[ ! -e "$pci_dir/driver" ] && return 0
+				;;
+		esac
+	done
+	return 1
+}
+
+if [ "$nomodeset" = "0" ]
+then
+	# Poll up to 5s (25 * 0.2s) if a real KMS card is still replacing
+	# simpledrm or creating /dev/dri/card*. Break immediately once a
+	# real KMS card node exists.
+	i=0
+	while [ "$i" -lt 25 ]
+	do
+		if has_non_simpledrm_card
+		then
+			break
+		fi
+		if has_any_drm_card && ! has_unbound_pci_display && [ "$i" -ge 5 ]
+		then
+			# simpledrm is present and no unbound PCI GPU is waiting
+			# on a driver; 1s grace period is enough.
+			break
+		fi
+		if ! has_any_drm_card && ! has_unbound_pci_display && [ "$i" -ge 10 ]
+		then
+			break
+		fi
+		sleep 0.2 2>/dev/null || sleep 1
+		i=$((i + 1))
+	done
+
+	if command -v udevadm >/dev/null 2>&1
+	then
+		udevadm settle --timeout=3 >/dev/null 2>&1 || true
+	fi
+fi
+
+# Give systemd-logind up to 2s to process udev's master-of-seat tag on
+# KMS systems so seat0 is fully ready when LightDM connects.
+if has_any_drm_card && command -v loginctl >/dev/null 2>&1
+then
+	i=0
+	while [ "$i" -lt 10 ]
+	do
+		can_gfx="$(loginctl show-seat seat0 -p CanGraphical --value 2>/dev/null || true)"
+		[ "$can_gfx" = "yes" ] && break
+		sleep 0.2 2>/dev/null || sleep 1
+		i=$((i + 1))
+	done
+fi
+
+exit 0
+EOF
+chmod +x config/includes.chroot/usr/sbin/linuxium-wait-graphics
+
+mkdir -p config/includes.chroot/etc/systemd/system/lightdm.service.d
+cat > config/includes.chroot/etc/systemd/system/lightdm.service.d/50-linuxium.conf <<'EOF'
+[Unit]
+Wants=systemd-logind.service systemd-udev-trigger.service
+After=systemd-logind.service systemd-udev-trigger.service linuxium-virtualbox-graphics.service
+OnFailure=linuxium-boot-fallback-vt.service
+StartLimitIntervalSec=30s
+StartLimitBurst=10
+
+[Service]
+ExecStartPre=-/usr/sbin/linuxium-wait-graphics
+RestartSec=2s
+EOF
+
+cat > config/includes.chroot/etc/systemd/system/linuxium-boot-fallback-vt.service <<'EOF'
+[Unit]
+Description=Linuxium console fallback if display manager fails to start
+DefaultDependencies=no
+After=plymouth-quit.service
+
+[Service]
+Type=oneshot
+ExecStart=-/bin/plymouth quit
+ExecStart=-/bin/chvt 1
+ExecStart=-/bin/systemctl --no-block start getty@tty1.service
+EOF
+
 mkdir -p config/includes.chroot/etc/X11/xorg.conf.d
 cat > config/includes.chroot/etc/X11/xorg.conf.d/20-linuxium-vm-kms.conf <<'EOF'
-# Linuxium: use the generic KMS/modesetting X driver for the virtual GPUs
-# that VirtualBox exposes. No match means no effect on any other hardware.
-Section "OutputClass"
-	Identifier	"Linuxium VMware/VirtualBox SVGA KMS"
-	MatchDriver	"vmwgfx"
-	Driver		"modesetting"
-EndSection
-
+# Linuxium: VirtualBox's legacy vboxvideo KMS driver has no separate Xorg
+# DDX in Bookworm; run modesetting with ShadowFB, software cursor and no
+# KMS page-flipping so VBoxSVGA does not stall or hide the pointer.
+# (vmwgfx is intentionally NOT matched here so VMware and VirtualBox
+# VMSVGA keep xserver-xorg-video-vmware's native vmwgfx driver.)
 Section "OutputClass"
 	Identifier	"Linuxium VirtualBox Graphics KMS"
 	MatchDriver	"vboxvideo"
 	Driver		"modesetting"
+	Option		"AccelMethod" "none"
+	Option		"PageFlip" "false"
+	Option		"SWCursor" "true"
 EndSection
 EOF
-
-mkdir -p config/includes.chroot/usr/sbin
 cat > config/includes.chroot/usr/sbin/linuxium-virtualbox-graphics <<'EOF'
 #!/bin/sh
 # Linuxium: keep VirtualBox on Cinnamon's software-rendering session.
@@ -1466,6 +1693,8 @@ cat > "$LIVE_CFG_DIR/0190-linuxium-graphics" <<'LIVEEOF'
 LINUXIUM_SESSION=""
 LINUXIUM_XORG_DRIVER=""
 LINUXIUM_NOMODESET=""
+LINUXIUM_NOAUTOLOGIN=""
+LINUXIUM_LIVE_USER="${LIVE_USERNAME:-linuxium}"
 
 Cmdline ()
 {
@@ -1488,8 +1717,16 @@ Cmdline ()
 				LINUXIUM_XORG_DRIVER="${_PARAMETER#*=}"
 				;;
 
-			nomodeset)
+			nomodeset|*.modeset=0)
 				LINUXIUM_NOMODESET="true"
+				;;
+
+			live-config.noautologin|noautologin|live-config.nox11autologin|nox11autologin)
+				LINUXIUM_NOAUTOLOGIN="true"
+				;;
+
+			live-config.username=*|username=*)
+				LINUXIUM_LIVE_USER="${_PARAMETER#*username=}"
 				;;
 		esac
 	done
@@ -1556,14 +1793,20 @@ Config ()
 	{
 		echo "[LightDM]"
 		# Do not gate the greeter on logind's CanGraphical flag: on some
-		# VirtualBox graphics stacks it never flips true and LightDM
-		# simply waits forever, which looks like "only the terminal
-		# works" even though the system finished booting.
+		# non-KMS / nomodeset graphics stacks it never flips true and
+		# LightDM simply waits forever. KMS coldplug + simpledrm handoff
+		# synchronization is handled by linuxium-wait-graphics before
+		# lightdm.service starts.
 		echo "logind-check-graphical=false"
 		echo "start-default-seat=true"
 		echo ""
 		echo "[Seat:*]"
 		echo "greeter-session=lightdm-gtk-greeter"
+		if [ -z "${LINUXIUM_NOAUTOLOGIN}" ] && [ -n "${LINUXIUM_LIVE_USER}" ]
+		then
+			echo "autologin-user=${LINUXIUM_LIVE_USER}"
+			echo "autologin-user-timeout=0"
+		fi
 		if [ -n "${LINUXIUM_SESSION}" ]
 		then
 			echo "user-session=${LINUXIUM_SESSION}"
@@ -1586,18 +1829,18 @@ Config ()
 	else
 		mkdir -p "$(dirname "${_XORG_VM_CONF}")"
 		cat > "${_XORG_VM_CONF}" <<'XORGEOF'
-# Linuxium: use the generic KMS/modesetting X driver for the virtual GPUs
-# that VirtualBox exposes. No match means no effect on any other hardware.
-Section "OutputClass"
-	Identifier	"Linuxium VMware/VirtualBox SVGA KMS"
-	MatchDriver	"vmwgfx"
-	Driver		"modesetting"
-EndSection
-
+# Linuxium: VirtualBox's legacy vboxvideo KMS driver has no separate Xorg
+# DDX in Bookworm; run modesetting with ShadowFB, software cursor and no
+# KMS page-flipping so VBoxSVGA does not stall or hide the pointer.
+# (vmwgfx is intentionally NOT matched here so VMware and VirtualBox
+# VMSVGA keep xserver-xorg-video-vmware's native vmwgfx driver.)
 Section "OutputClass"
 	Identifier	"Linuxium VirtualBox Graphics KMS"
 	MatchDriver	"vboxvideo"
 	Driver		"modesetting"
+	Option		"AccelMethod" "none"
+	Option		"PageFlip" "false"
+	Option		"SWCursor" "true"
 EndSection
 XORGEOF
 	fi
@@ -1829,7 +2072,10 @@ if [ -f binary/live/filesystem.squashfs ]; then
     "/usr/share/xsessions/cinnamon.desktop" \
     "/usr/share/xsessions/cinnamon2d.desktop" \
     "/live/config/0190-linuxium-graphics" \
+    "/usr/sbin/linuxium-wait-graphics" \
     "/usr/sbin/linuxium-virtualbox-graphics" \
+    "/etc/systemd/system/lightdm.service.d/50-linuxium.conf" \
+    "/etc/systemd/system/linuxium-boot-fallback-vt.service" \
     "/etc/systemd/system/linuxium-virtualbox-graphics.service" \
     "/etc/systemd/system/multi-user.target.wants/linuxium-virtualbox-graphics.service" \
     "/etc/lightdm/lightdm.conf.d/50-linuxium.conf" \
@@ -1837,6 +2083,8 @@ if [ -f binary/live/filesystem.squashfs ]; then
     "/usr/share/initramfs-tools/hooks/cryptroot" \
     "/usr/share/plymouth/themes/linuxium/linuxium.plymouth" \
     "/usr/share/plymouth/themes/linuxium/linuxium.script" \
+    "/usr/share/plymouth/themes/linuxium/progress-track.png" \
+    "/usr/share/plymouth/themes/linuxium/progress-bar.png" \
     "/usr/share/themes/CBlack/index.theme" \
     "/usr/share/themes/CBlack/cinnamon/cinnamon.css" \
     "/usr/share/themes/CBlack/gtk-3.0/gtk.css" \

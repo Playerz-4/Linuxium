@@ -10,9 +10,10 @@ on:
   workflow_dispatch:
     inputs:
       run_id:
-        description: "ID of the Build Linuxium ISO run to test"
+        description: "Build Linuxium ISO run ID or URL (leave empty for latest successful build)"
         type: string
-        required: true
+        required: false
+        default: ""
       wait_seconds:
         description: "Seconds to let the VM boot before the screenshot"
         type: string
@@ -32,12 +33,54 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
+      - name: Resolve the ISO build run ID
+        id: resolve
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RAW_RUN_ID: ${{ inputs.run_id }}
+        run: |
+          set -euo pipefail
+          raw="$(printf '%s' "$RAW_RUN_ID" | tr -d '[:space:]')"
+          run_id=""
+          if [ -n "$raw" ]; then
+            if printf '%s' "$raw" | grep -qE 'actions/runs/[0-9]+'; then
+              run_id="$(printf '%s' "$raw" | grep -oE 'actions/runs/[0-9]+' | head -n 1 | cut -d/ -f3)"
+            elif printf '%s' "$raw" | grep -qE '^[0-9]+$'; then
+              run_id="$raw"
+            else
+              echo "ERROR: run_id must be a numeric workflow run ID, a GitHub Actions run URL, or empty; got: $RAW_RUN_ID" >&2
+              exit 1
+            fi
+          else
+            echo "No run_id supplied; searching for the latest successful Build Linuxium ISO run with an active linuxium-iso artifact..."
+            candidates="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/build-iso.yml/runs?status=success&per_page=10" --jq '.workflow_runs[].id')"
+            for cid in $candidates; do
+              count="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${cid}/artifacts" --jq '[.artifacts[] | select(.name == "linuxium-iso" and .expired == false)] | length')"
+              if [ "${count:-0}" -gt 0 ]; then
+                run_id="$cid"
+                break
+              fi
+            done
+            if [ -z "$run_id" ]; then
+              echo "ERROR: could not find a recent successful 'Build Linuxium ISO' run with an unexpired 'linuxium-iso' artifact." >&2
+              exit 1
+            fi
+          fi
+
+          art_count="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}/artifacts" --jq '[.artifacts[] | select(.name == "linuxium-iso" and .expired == false)] | length')"
+          if [ "${art_count:-0}" -eq 0 ]; then
+            echo "ERROR: run ${run_id} does not have an unexpired 'linuxium-iso' artifact (make sure it is a completed 'Build Linuxium ISO' run ID, not a job ID)." >&2
+            exit 1
+          fi
+          echo "Using Build Linuxium ISO run_id=${run_id}"
+          echo "run_id=${run_id}" >> "$GITHUB_OUTPUT"
+
       - name: Download the ISO from the build run
         uses: actions/download-artifact@v8
         with:
           name: linuxium-iso
           path: iso
-          run-id: ${{ inputs.run_id }}
+          run-id: ${{ steps.resolve.outputs.run_id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Install QEMU and tools
@@ -46,13 +89,29 @@ jobs:
           sudo apt-get install -y qemu-system-x86 qemu-utils socat imagemagick
 
       - name: Boot the ISO and capture a screenshot
+        env:
+          WAIT_SECONDS: ${{ inputs.wait_seconds }}
         run: |
           set -euo pipefail
           iso_file="$(ls iso/*.iso)"
           echo "Booting: $iso_file"
-          # BIOS boot (matches the ISOLINUX path); software emulation only.
+
+          kvm_args=()
+          if [ -e /dev/kvm ]; then
+            sudo chmod 666 /dev/kvm || true
+          fi
+          if [ -r /dev/kvm ] && [ -w /dev/kvm ]; then
+            echo "Hardware virtualization (/dev/kvm) is available; enabling KVM."
+            kvm_args=(-enable-kvm -cpu host)
+          else
+            echo "No /dev/kvm on this runner; using QEMU TCG software emulation."
+          fi
+
+          # BIOS boot (matches the ISOLINUX path).
           qemu-system-x86_64 \
+            "${kvm_args[@]}" \
             -m 3072 -smp 2 \
+            -vga std \
             -cdrom "$iso_file" -boot d \
             -display none \
             -monitor unix:/tmp/qemu-monitor,server,nowait \
@@ -60,12 +119,24 @@ jobs:
             > qemu.log 2>&1 &
           echo $! > qemu.pid
 
-          wait_s="${{ inputs.wait_seconds }}"
+          wait_s="$WAIT_SECONDS"
           case "$wait_s" in
             ''|*[!0-9]*) echo "wait_seconds must be a number, got: $wait_s" >&2; exit 1 ;;
           esac
-          echo "Waiting ${wait_s}s for the VM to boot..."
-          sleep "$wait_s"
+
+          # Give ISOLINUX a few seconds to appear, then press Enter so the
+          # default Live entry starts immediately instead of waiting out the
+          # menu timer.
+          if [ "$wait_s" -gt 10 ]; then
+            sleep 8
+            echo "sendkey ret" | socat - UNIX-CONNECT:/tmp/qemu-monitor || true
+            rem_s=$((wait_s - 8))
+          else
+            rem_s="$wait_s"
+          fi
+
+          echo "Waiting ${rem_s}s for the VM to boot..."
+          sleep "$rem_s"
 
           if ! kill -0 "$(cat qemu.pid)" 2>/dev/null; then
             echo "ERROR: QEMU exited early" >&2
@@ -78,9 +149,10 @@ jobs:
           test -s screenshot.ppm
           convert screenshot.ppm screenshot.png
 
-          # A kernel panic / black screen is (nearly) uniformly dark; a
-          # boot menu, splash or desktop is not. Fail loudly if the frame
-          # looks dead so a red run actually means "did not boot".
+          # Fail loudly on BOTH a dead black screen AND a white Plymouth
+          # splash hang: Linuxium's Plymouth splash is solid white with a
+          # small centered logo (mean > 0.94), whereas the booted CBlack
+          # desktop + wallpaper has balanced mid-tones.
           mean="$(convert screenshot.png -colorspace Gray -format '%[fx:mean]' info:)"
           echo "Screenshot mean brightness: $mean"
           python3 - "$mean" <<'PYEOF'
@@ -89,7 +161,10 @@ jobs:
           if mean < 0.02:
               print("ERROR: screenshot is almost completely black - the ISO likely did not boot to graphics", file=sys.stderr)
               sys.exit(1)
-          print("Screenshot looks alive (not a black screen).")
+          if mean > 0.94:
+              print("ERROR: screenshot is almost completely white - the ISO appears stuck on the Plymouth loading screen", file=sys.stderr)
+              sys.exit(1)
+          print("Screenshot looks alive (past the white splash screen and not a black screen).")
           PYEOF
           ls -lh screenshot.png
 
