@@ -1,10 +1,10 @@
 name: Boot-test ISO in QEMU
 
-# Manually-boot a built ISO in QEMU and capture a screenshot of whatever
-# is on screen after a wait, so "the ISO builds" can become "the ISO
-# boots to a desktop". Manual-only on purpose: GitHub runners have no
-# KVM, so QEMU uses slow software emulation and this takes minutes.
-# It never runs automatically and cannot affect the build/release flow.
+# Manually boot a built ISO in QEMU, stream kernel + systemd journal logs
+# over the virtual serial port, and verify the system reaches a rendered
+# desktop past ISOLINUX and Plymouth. Manual-only on purpose: if a GitHub
+# runner lacks /dev/kvm, QEMU uses TCG software emulation and takes
+# several minutes. It never runs automatically and cannot block releases.
 
 on:
   workflow_dispatch:
@@ -15,10 +15,15 @@ on:
         required: false
         default: ""
       wait_seconds:
-        description: "Seconds to let the VM boot before the screenshot"
+        description: "Max seconds to wait for desktop ('auto' = 240s KVM / 720s TCG, or a number)"
         type: string
         required: false
-        default: "240"
+        default: "auto"
+      allow_stale_iso:
+        description: "Test the latest ISO even if ISO-building files changed since that build"
+        type: boolean
+        required: false
+        default: false
 
 permissions:
   actions: read
@@ -33,16 +38,25 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
-      - name: Resolve the ISO build run ID
+      - name: Check out repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Resolve and validate the ISO build run
         id: resolve
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           RAW_RUN_ID: ${{ inputs.run_id }}
+          ALLOW_STALE_ISO: ${{ inputs.allow_stale_iso }}
         run: |
           set -euo pipefail
           raw="$(printf '%s' "$RAW_RUN_ID" | tr -d '[:space:]')"
+          explicit_run="false"
           run_id=""
+
           if [ -n "$raw" ]; then
+            explicit_run="true"
             if printf '%s' "$raw" | grep -qE 'actions/runs/[0-9]+'; then
               run_id="$(printf '%s' "$raw" | grep -oE 'actions/runs/[0-9]+' | head -n 1 | cut -d/ -f3)"
             elif printf '%s' "$raw" | grep -qE '^[0-9]+$'; then
@@ -52,8 +66,13 @@ jobs:
               exit 1
             fi
           else
-            echo "No run_id supplied; searching for the latest successful Build Linuxium ISO run with an active linuxium-iso artifact..."
-            candidates="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/build-iso.yml/runs?status=success&per_page=10" --jq '.workflow_runs[].id')"
+            echo "No run_id supplied; searching for the latest successful 'Build Linuxium ISO' run with an active 'linuxium-iso' artifact..."
+            in_prog="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/build-iso.yml/runs?per_page=5" --jq '[.workflow_runs[] | select(.status != "completed") | .id] | first // empty')"
+            if [ -n "$in_prog" ]; then
+              echo "::notice::A 'Build Linuxium ISO' run (${in_prog}) is currently still running; wait for it to finish if you intended to test that new build."
+            fi
+
+            candidates="$(gh api "repos/${GITHUB_REPOSITORY}/actions/workflows/build-iso.yml/runs?status=success&per_page=15" --jq '.workflow_runs[].id')"
             for cid in $candidates; do
               count="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${cid}/artifacts" --jq '[.artifacts[] | select(.name == "linuxium-iso" and .expired == false)] | length')"
               if [ "${count:-0}" -gt 0 ]; then
@@ -62,7 +81,7 @@ jobs:
               fi
             done
             if [ -z "$run_id" ]; then
-              echo "ERROR: could not find a recent successful 'Build Linuxium ISO' run with an unexpired 'linuxium-iso' artifact." >&2
+              echo "ERROR: could not find a recent successful 'Build Linuxium ISO' run with an unexpired 'linuxium-iso' artifact. Run 'Build Linuxium ISO' first." >&2
               exit 1
             fi
           fi
@@ -72,8 +91,75 @@ jobs:
             echo "ERROR: run ${run_id} does not have an unexpired 'linuxium-iso' artifact (make sure it is a completed 'Build Linuxium ISO' run ID, not a job ID)." >&2
             exit 1
           fi
-          echo "Using Build Linuxium ISO run_id=${run_id}"
-          echo "run_id=${run_id}" >> "$GITHUB_OUTPUT"
+
+          iso_sha="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}" --jq '.head_sha')"
+          iso_created_at="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}" --jq '.created_at')"
+          iso_url="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${run_id}" --jq '.html_url')"
+          iso_short="${iso_sha:0:7}"
+          head_short="${GITHUB_SHA:0:7}"
+
+          echo "Resolved Build Linuxium ISO run ${run_id} (${iso_url})"
+          echo "  ISO commit:      ${iso_sha} (built ${iso_created_at})"
+          echo "  Workflow commit: ${GITHUB_SHA}"
+
+          iso_freshness="exact-match"
+          if [ "$iso_sha" != "$GITHUB_SHA" ]; then
+            iso_inputs=(
+              build-linuxium.sh
+              themes
+              wallpaper.png
+              lynx.png
+              grub-bg.png
+              .github/workflows/build-iso.yml
+            )
+            if git cat-file -e "${iso_sha}^{commit}" 2>/dev/null; then
+              changed_inputs="$(git diff --name-only "$iso_sha" "$GITHUB_SHA" -- "${iso_inputs[@]}")"
+              if [ -n "$changed_inputs" ]; then
+                iso_freshness="stale-inputs-changed"
+                echo "ISO-building files changed between ISO build ${iso_short} and ${head_short}:"
+                printf '%s\n' "$changed_inputs" | sed 's/^/  - /'
+                if [ "$explicit_run" != "true" ] && [ "$ALLOW_STALE_ISO" != "true" ]; then
+                  {
+                    echo "### Boot-test ISO stopped: stale ISO artifact detected"
+                    echo ""
+                    echo "'Build Linuxium ISO' is manual/tag-triggered and has not been run since ISO-building files changed."
+                    echo ""
+                    echo "| Field | Value |"
+                    echo "| --- | --- |"
+                    echo "| Latest ISO run | [${run_id}](${iso_url}) (${iso_created_at}) |"
+                    echo "| ISO commit | \`${iso_short}\` (\`${iso_sha}\`) |"
+                    echo "| Current commit | \`${head_short}\` (\`${GITHUB_SHA}\`) |"
+                    echo ""
+                    echo "**Changed ISO inputs since \`${iso_short}\`:**"
+                    printf '%s\n' "$changed_inputs" | sed 's/^/- \x60/; s/$/\x60/'
+                    echo ""
+                    echo "**Next step:** Run **Build Linuxium ISO** on \`${head_short}\` first, then re-run **Boot-test ISO in QEMU** (or set \`allow_stale_iso: true\` / an explicit \`run_id\` to intentionally test the older ISO)."
+                  } >> "$GITHUB_STEP_SUMMARY"
+                  echo "::error::Latest 'Build Linuxium ISO' artifact (run ${run_id}, commit ${iso_short}) predates ISO-building changes in ${head_short}. Run 'Build Linuxium ISO' first so a fresh ISO exists, or re-run with allow_stale_iso=true (or an explicit run_id) to test the older ISO anyway."
+                  exit 1
+                fi
+                echo "::warning::Testing older ISO from run ${run_id} (${iso_short}) against workflow commit ${head_short} even though ISO-building files changed."
+              else
+                iso_freshness="inputs-unchanged"
+                echo "No ISO-building files changed between ${iso_short} and ${head_short}; reusing ISO from run ${run_id}."
+              fi
+            else
+              iso_freshness="unknown-history"
+              if [ "$explicit_run" != "true" ] && [ "$ALLOW_STALE_ISO" != "true" ]; then
+                echo "::error::ISO commit ${iso_short} (run ${run_id}) is not in local git history for ${head_short}. Run 'Build Linuxium ISO' from this branch or pass allow_stale_iso=true / an explicit run_id."
+                exit 1
+              fi
+              echo "::warning::ISO commit ${iso_short} is outside current git history; proceeding due to explicit override."
+            fi
+          fi
+
+          {
+            echo "run_id=${run_id}"
+            echo "iso_sha=${iso_sha}"
+            echo "iso_created_at=${iso_created_at}"
+            echo "iso_url=${iso_url}"
+            echo "iso_freshness=${iso_freshness}"
+          } >> "$GITHUB_OUTPUT"
 
       - name: Download the ISO from the build run
         uses: actions/download-artifact@v8
@@ -83,90 +169,333 @@ jobs:
           run-id: ${{ steps.resolve.outputs.run_id }}
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Verify downloaded ISO checksum
+        run: |
+          set -euo pipefail
+          cd iso
+          shopt -s nullglob
+          isos=(*.iso)
+          if [ "${#isos[@]}" -ne 1 ]; then
+            echo "ERROR: expected exactly one .iso in artifact, found ${#isos[@]}: ${isos[*]:-none}" >&2
+            ls -la
+            exit 1
+          fi
+          sums=(*.iso.sha256)
+          if [ "${#sums[@]}" -eq 1 ]; then
+            echo "Verifying ${isos[0]} against ${sums[0]}..."
+            sha256sum -c "${sums[0]}"
+          fi
+
       - name: Install QEMU and tools
         run: |
           sudo apt-get update
           sudo apt-get install -y qemu-system-x86 qemu-utils socat imagemagick
 
       - name: Boot the ISO and capture a screenshot
+        id: boot
         env:
           WAIT_SECONDS: ${{ inputs.wait_seconds }}
         run: |
           set -euo pipefail
-          iso_file="$(ls iso/*.iso)"
+          shopt -s nullglob
+          isos=(iso/*.iso)
+          iso_file="${isos[0]}"
           echo "Booting: $iso_file"
 
-          kvm_args=()
+          # Load KVM kernel modules explicitly when nested virtualization
+          # is available on the runner before checking /dev/kvm.
+          if [ ! -e /dev/kvm ]; then
+            sudo modprobe kvm_intel 2>/dev/null || sudo modprobe kvm_amd 2>/dev/null || true
+          fi
           if [ -e /dev/kvm ]; then
             sudo chmod 666 /dev/kvm || true
           fi
+
+          accel_mode="tcg"
+          accel_args=(-accel "tcg,thread=multi" -cpu max)
+          default_wait=720
           if [ -r /dev/kvm ] && [ -w /dev/kvm ]; then
             echo "Hardware virtualization (/dev/kvm) is available; enabling KVM."
-            kvm_args=(-enable-kvm -cpu host)
+            accel_mode="kvm"
+            accel_args=(-enable-kvm -cpu host)
+            default_wait=240
           else
-            echo "No /dev/kvm on this runner; using QEMU TCG software emulation."
+            echo "No /dev/kvm on this runner; using multi-threaded QEMU TCG software emulation."
           fi
 
-          # BIOS boot (matches the ISOLINUX path).
+          raw_wait="$(printf '%s' "$WAIT_SECONDS" | tr -d '[:space:]')"
+          if [ -z "$raw_wait" ] || [ "$raw_wait" = "auto" ]; then
+            wait_s="$default_wait"
+          else
+            case "$raw_wait" in
+              *[!0-9]*)
+                echo "ERROR: wait_seconds must be 'auto' or a positive integer, got: $WAIT_SECONDS" >&2
+                exit 1
+                ;;
+            esac
+            if [ "$raw_wait" -lt 20 ]; then
+              echo "ERROR: wait_seconds must be at least 20 seconds, got: $raw_wait" >&2
+              exit 1
+            fi
+            wait_s="$raw_wait"
+          fi
+
+          ncpus="$(nproc 2>/dev/null || echo 2)"
+          if [ "$ncpus" -gt 4 ]; then
+            ncpus=4
+          fi
+
+          echo "VM config: machine=q35 accel=${accel_mode} vcpus=${ncpus} ram=3072M max_wait=${wait_s}s"
+          {
+            echo "accel_mode=${accel_mode}"
+            echo "vcpus=${ncpus}"
+            echo "max_wait=${wait_s}"
+          } >> "$GITHUB_OUTPUT"
+
+          rm -f /tmp/qemu-monitor qemu.pid qemu.log serial.log screenshot.ppm screenshot.png
+          : > serial.log
+
+          hmp() {
+            printf '%s\n' "$1" | socat - UNIX-CONNECT:/tmp/qemu-monitor >/dev/null 2>&1 || true
+          }
+
+          cleanup_qemu() {
+            if [ -f qemu.pid ]; then
+              local pid
+              pid="$(cat qemu.pid 2>/dev/null || true)"
+              if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+                hmp "quit"
+                sleep 1
+                kill "$pid" 2>/dev/null || true
+              fi
+            fi
+          }
+          trap cleanup_qemu EXIT
+
+          # Use q35 so the live CD-ROM sits on AHCI SATA DMA rather than
+          # legacy PIIX3 IDE PIO (major SquashFS throughput win under TCG),
+          # while keeping -vga std (bochs-drm) and SeaBIOS El Torito boot.
           qemu-system-x86_64 \
-            "${kvm_args[@]}" \
-            -m 3072 -smp 2 \
+            -machine q35 \
+            "${accel_args[@]}" \
+            -m 3072 -smp "$ncpus" \
             -vga std \
             -cdrom "$iso_file" -boot d \
             -display none \
             -monitor unix:/tmp/qemu-monitor,server,nowait \
             -serial file:serial.log \
             > qemu.log 2>&1 &
-          echo $! > qemu.pid
+          qemu_pid=$!
+          echo "$qemu_pid" > qemu.pid
 
-          wait_s="$WAIT_SECONDS"
-          case "$wait_s" in
-            ''|*[!0-9]*) echo "wait_seconds must be a number, got: $wait_s" >&2; exit 1 ;;
-          esac
+          for _ in $(seq 1 30); do
+            [ -S /tmp/qemu-monitor ] && break
+            if ! kill -0 "$qemu_pid" 2>/dev/null; then
+              echo "ERROR: QEMU exited before opening its monitor socket" >&2
+              cat qemu.log >&2 || true
+              exit 1
+            fi
+            sleep 0.5
+          done
 
-          # Give ISOLINUX a few seconds to appear, then press Enter so the
-          # default Live entry starts immediately instead of waiting out the
-          # menu timer.
-          if [ "$wait_s" -gt 10 ]; then
-            sleep 8
-            echo "sendkey ret" | socat - UNIX-CONNECT:/tmp/qemu-monitor || true
-            rem_s=$((wait_s - 8))
-          else
-            rem_s="$wait_s"
-          fi
+          # Wait for the ISOLINUX VESA boot menu (640x480 splash) to appear.
+          for _ in $(seq 1 15); do
+            sleep 2
+            if ! kill -0 "$qemu_pid" 2>/dev/null; then
+              echo "ERROR: QEMU exited before reaching the ISOLINUX boot menu" >&2
+              cat qemu.log >&2 || true
+              exit 1
+            fi
+            rm -f menu.ppm
+            hmp "screendump $PWD/menu.ppm"
+            if [ -s menu.ppm ]; then
+              menu_mean="$(convert menu.ppm -colorspace Gray -format '%[fx:mean]' info: 2>/dev/null || echo 0)"
+              if awk "BEGIN { exit !($menu_mean > 0.05) }"; then
+                break
+              fi
+            fi
+          done
+          rm -f menu.ppm
+          sleep 1
 
-          echo "Waiting ${rem_s}s for the VM to boot..."
-          sleep "$rem_s"
+          # Append serial console + systemd-journald kmsg forwarding to the
+          # selected ISOLINUX kernel cmdline before booting:
+          # - console=ttyS0,115200 console=tty0 keeps /dev/console on tty0
+          #   while streaming all kernel + kmsg logs to serial.log.
+          # - plymouth.ignore-serial-consoles keeps the graphical Plymouth
+          #   DRM splash active so Plymouth handoff is still exercised.
+          # - systemd.journald.forward_to_kmsg=1 mirrors userspace service
+          #   logs (live-config, lightdm, Xorg) into serial.log.
+          send_cmdline_append() {
+            local LC_ALL=C
+            local text="$1"
+            local i ch key
+            hmp "sendkey tab 30"
+            sleep 0.5
+            for ((i = 0; i < ${#text}; i++)); do
+              ch="${text:i:1}"
+              case "$ch" in
+                ' ') key="spc" ;;
+                '=') key="equal" ;;
+                ',') key="comma" ;;
+                '.') key="dot" ;;
+                '-') key="minus" ;;
+                '_') key="shift-minus" ;;
+                [A-Z]) key="shift-${ch,,}" ;;
+                [a-z0-9]) key="$ch" ;;
+                *)
+                  echo "ERROR: unsupported key character '$ch' in cmdline append" >&2
+                  return 1
+                  ;;
+              esac
+              hmp "sendkey $key 20"
+              sleep 0.04
+            done
+            sleep 0.3
+            hmp "sendkey ret 30"
+          }
 
-          if ! kill -0 "$(cat qemu.pid)" 2>/dev/null; then
-            echo "ERROR: QEMU exited early" >&2
-            cat qemu.log >&2 || true
-            exit 1
-          fi
+          send_cmdline_append " console=ttyS0,115200 console=tty0 plymouth.ignore-serial-consoles loglevel=6 systemd.journald.forward_to_kmsg=1"
 
-          echo "screendump $PWD/screenshot.ppm" | socat - UNIX-CONNECT:/tmp/qemu-monitor
-          echo "quit" | socat - UNIX-CONNECT:/tmp/qemu-monitor || true
+          # Poll screenshots every 10s so fast KVM runs complete as soon as
+          # Cinnamon stabilizes while slower TCG runs get their full budget.
+          poll_interval=10
+          elapsed=0
+          saw_plymouth=0
+          stable_desktop_polls=0
+          dims="unknown"
+          mean="0"
+
+          while [ "$elapsed" -lt "$wait_s" ]; do
+            sleep "$poll_interval"
+            elapsed=$((elapsed + poll_interval))
+
+            if ! kill -0 "$qemu_pid" 2>/dev/null; then
+              echo "ERROR: QEMU exited unexpectedly at ${elapsed}s" >&2
+              cat qemu.log >&2 || true
+              exit 1
+            fi
+
+            # Safety net if ISOLINUX missed the initial Enter keystroke.
+            if [ "$elapsed" -eq 20 ] && [ ! -s serial.log ]; then
+              hmp "sendkey ret 30"
+            fi
+
+            rm -f screenshot.ppm
+            hmp "screendump $PWD/screenshot.ppm"
+            if [ ! -s screenshot.ppm ]; then
+              continue
+            fi
+            convert screenshot.ppm screenshot.png
+            read -r dims mean < <(convert screenshot.png -colorspace Gray -format '%wx%h %[fx:mean]\n' info:)
+            serial_bytes="$(wc -c < serial.log | tr -d '[:space:]')"
+            echo "[t=${elapsed}s/${wait_s}s] frame=${dims} mean=${mean} serial_bytes=${serial_bytes}"
+
+            if awk "BEGIN { exit !($mean > 0.94) }"; then
+              saw_plymouth=1
+              stable_desktop_polls=0
+              continue
+            fi
+
+            past_bootloader=0
+            if [ "$dims" != "640x480" ] || [ "$saw_plymouth" -eq 1 ] || grep -q "Linux version" serial.log 2>/dev/null; then
+              past_bootloader=1
+            fi
+
+            if [ "$past_bootloader" -eq 1 ] && awk "BEGIN { exit !($mean >= 0.04 && $mean <= 0.90) }"; then
+              stable_desktop_polls=$((stable_desktop_polls + 1))
+              if [ "$stable_desktop_polls" -ge 2 ]; then
+                echo "Desktop frame stabilized across ${stable_desktop_polls} polls at ${elapsed}s (${dims}, mean=${mean})."
+                break
+              fi
+            else
+              stable_desktop_polls=0
+            fi
+          done
+
+          # Capture final screenshot before shutting down QEMU.
+          rm -f screenshot.ppm
+          hmp "screendump $PWD/screenshot.ppm"
           test -s screenshot.ppm
           convert screenshot.ppm screenshot.png
+          read -r dims mean < <(convert screenshot.png -colorspace Gray -format '%wx%h %[fx:mean]\n' info:)
+          hmp "quit"
 
-          # Fail loudly on BOTH a dead black screen AND a white Plymouth
-          # splash hang: Linuxium's Plymouth splash is solid white with a
-          # small centered logo (mean > 0.94), whereas the booted CBlack
-          # desktop + wallpaper has balanced mid-tones.
-          mean="$(convert screenshot.png -colorspace Gray -format '%[fx:mean]' info:)"
-          echo "Screenshot mean brightness: $mean"
-          python3 - "$mean" <<'PYEOF'
+          {
+            echo "elapsed_seconds=${elapsed}"
+            echo "final_dims=${dims}"
+            echo "final_mean=${mean}"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "Final screenshot: resolution=${dims} mean=${mean} after ${elapsed}s"
+
+          boot_kernel_seen=0
+          if [ "$dims" != "640x480" ] || [ "$saw_plymouth" -eq 1 ] || grep -q "Linux version" serial.log 2>/dev/null; then
+            boot_kernel_seen=1
+          fi
+
+          python3 - "$mean" "$dims" "$boot_kernel_seen" <<'PYEOF'
           import sys
           mean = float(sys.argv[1])
+          dims = sys.argv[2]
+          boot_kernel_seen = int(sys.argv[3])
+          if not boot_kernel_seen:
+              print(f"ERROR: VM never advanced past the {dims} bootloader screen", file=sys.stderr)
+              sys.exit(1)
           if mean < 0.02:
               print("ERROR: screenshot is almost completely black - the ISO likely did not boot to graphics", file=sys.stderr)
               sys.exit(1)
           if mean > 0.94:
               print("ERROR: screenshot is almost completely white - the ISO appears stuck on the Plymouth loading screen", file=sys.stderr)
               sys.exit(1)
-          print("Screenshot looks alive (past the white splash screen and not a black screen).")
+          print(f"Screenshot looks alive ({dims}, mean={mean:.4f}): past the white splash screen and not a black screen.")
           PYEOF
-          ls -lh screenshot.png
+          ls -lh screenshot.png serial.log
+
+      - name: Publish boot diagnostics summary
+        if: always() && steps.resolve.outcome == 'success'
+        env:
+          ISO_RUN_ID: ${{ steps.resolve.outputs.run_id }}
+          ISO_SHA: ${{ steps.resolve.outputs.iso_sha }}
+          ISO_CREATED_AT: ${{ steps.resolve.outputs.iso_created_at }}
+          ISO_URL: ${{ steps.resolve.outputs.iso_url }}
+          ISO_FRESHNESS: ${{ steps.resolve.outputs.iso_freshness }}
+          ACCEL_MODE: ${{ steps.boot.outputs.accel_mode }}
+          VCPUS: ${{ steps.boot.outputs.vcpus }}
+          MAX_WAIT: ${{ steps.boot.outputs.max_wait }}
+          ELAPSED_SECONDS: ${{ steps.boot.outputs.elapsed_seconds }}
+          FINAL_DIMS: ${{ steps.boot.outputs.final_dims }}
+          FINAL_MEAN: ${{ steps.boot.outputs.final_mean }}
+          BOOT_OUTCOME: ${{ steps.boot.outcome }}
+        run: |
+          set -euo pipefail
+          {
+            echo "### QEMU Boot-Test Summary (${BOOT_OUTCOME})"
+            echo ""
+            echo "| Metric | Value |"
+            echo "| --- | --- |"
+            echo "| Build run | [${ISO_RUN_ID}](${ISO_URL}) (${ISO_CREATED_AT}) |"
+            echo "| ISO commit | \`${ISO_SHA:0:7}\` (\`${ISO_FRESHNESS}\` vs \`${GITHUB_SHA:0:7}\`) |"
+            echo "| Acceleration | \`${ACCEL_MODE:-n/a}\` (${VCPUS:-n/a} vCPUs, budget ${MAX_WAIT:-n/a}s) |"
+            echo "| Boot duration | ${ELAPSED_SECONDS:-n/a}s |"
+            echo "| Final frame | \`${FINAL_DIMS:-n/a}\`, grayscale mean \`${FINAL_MEAN:-n/a}\` |"
+            echo ""
+            if [ -s serial.log ]; then
+              echo "<details><summary>Last 80 lines of serial.log</summary>"
+              echo ""
+              echo '```text'
+              tail -n 80 serial.log | tr -d '\r'
+              echo '```'
+              echo "</details>"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "$BOOT_OUTCOME" != "success" ]; then
+            echo "=== Tail of qemu.log ==="
+            tail -n 60 qemu.log 2>/dev/null || true
+            echo "=== Tail of serial.log ==="
+            tail -n 120 serial.log 2>/dev/null | tr -d '\r' || true
+          fi
 
       - name: Upload screenshot and logs
         if: always()

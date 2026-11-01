@@ -1281,13 +1281,13 @@ EOF
 #     OnFailure VT1 fallback eliminates all of those splash hangs while
 #     preserving non-KMS / nomodeset bootability.
 #
-#  2. A narrow Xorg OutputClass for VirtualBox's legacy vboxvideo KMS
-#     driver (which has no dedicated Xorg DDX in Bookworm) using
-#     ShadowFB without Glamor/PageFlip stalls. Crucially, do NOT force
-#     modesetting onto vmwgfx: xserver-xorg-video-vmware provides the
-#     native vmwgfx Xorg backend for both VMware and VirtualBox VMSVGA,
-#     whereas forcing modesetting + glamor + PageFlip onto vmwgfx causes
-#     black screens / splash hangs.
+#  2. Narrow Xorg OutputClass rules for VirtualBox's legacy vboxvideo KMS
+#     driver and QEMU/Bochs Standard VGA (bochs-drm, 16 MiB PCI VRAM)
+#     using ShadowFB without Glamor/PageFlip stalls or VRAM exhaustion.
+#     Crucially, do NOT force modesetting onto vmwgfx:
+#     xserver-xorg-video-vmware provides the native vmwgfx Xorg backend
+#     for both VMware and VirtualBox VMSVGA, whereas forcing modesetting
+#     + glamor + PageFlip onto vmwgfx causes black screens / splash hangs.
 #
 #  3. A tiny oneshot service that runs before LightDM every boot and
 #     selects Cinnamon's software-rendering session when (and only when)
@@ -1413,11 +1413,11 @@ chmod +x config/includes.chroot/usr/sbin/linuxium-wait-graphics
 mkdir -p config/includes.chroot/etc/systemd/system/lightdm.service.d
 cat > config/includes.chroot/etc/systemd/system/lightdm.service.d/50-linuxium.conf <<'EOF'
 [Unit]
-Wants=systemd-logind.service systemd-udev-trigger.service
-After=systemd-logind.service systemd-udev-trigger.service linuxium-virtualbox-graphics.service
+Wants=dbus.service systemd-logind.service systemd-udev-trigger.service
+After=dbus.service systemd-logind.service systemd-udev-trigger.service linuxium-virtualbox-graphics.service
 OnFailure=linuxium-boot-fallback-vt.service
-StartLimitIntervalSec=30s
-StartLimitBurst=10
+StartLimitIntervalSec=60s
+StartLimitBurst=5
 
 [Service]
 ExecStartPre=-/usr/sbin/linuxium-wait-graphics
@@ -1439,14 +1439,25 @@ EOF
 
 mkdir -p config/includes.chroot/etc/X11/xorg.conf.d
 cat > config/includes.chroot/etc/X11/xorg.conf.d/20-linuxium-vm-kms.conf <<'EOF'
-# Linuxium: VirtualBox's legacy vboxvideo KMS driver has no separate Xorg
-# DDX in Bookworm; run modesetting with ShadowFB, software cursor and no
-# KMS page-flipping so VBoxSVGA does not stall or hide the pointer.
+# Linuxium: VirtualBox's legacy vboxvideo KMS driver and QEMU/Bochs
+# Standard VGA (bochs-drm, 16 MiB PCI VRAM in Bookworm's 6.1 kernel) have
+# no hardware 3D engine; run modesetting with ShadowFB, software cursor
+# and no KMS page-flipping so glamor/kms_swrast cannot exhaust small VM
+# VRAM bars or stall page flips.
 # (vmwgfx is intentionally NOT matched here so VMware and VirtualBox
 # VMSVGA keep xserver-xorg-video-vmware's native vmwgfx driver.)
 Section "OutputClass"
 	Identifier	"Linuxium VirtualBox Graphics KMS"
 	MatchDriver	"vboxvideo"
+	Driver		"modesetting"
+	Option		"AccelMethod" "none"
+	Option		"PageFlip" "false"
+	Option		"SWCursor" "true"
+EndSection
+
+Section "OutputClass"
+	Identifier	"Linuxium QEMU Standard VGA KMS"
+	MatchDriver	"bochs-drm"
 	Driver		"modesetting"
 	Option		"AccelMethod" "none"
 	Option		"PageFlip" "false"
@@ -1829,14 +1840,25 @@ Config ()
 	else
 		mkdir -p "$(dirname "${_XORG_VM_CONF}")"
 		cat > "${_XORG_VM_CONF}" <<'XORGEOF'
-# Linuxium: VirtualBox's legacy vboxvideo KMS driver has no separate Xorg
-# DDX in Bookworm; run modesetting with ShadowFB, software cursor and no
-# KMS page-flipping so VBoxSVGA does not stall or hide the pointer.
+# Linuxium: VirtualBox's legacy vboxvideo KMS driver and QEMU/Bochs
+# Standard VGA (bochs-drm, 16 MiB PCI VRAM in Bookworm's 6.1 kernel) have
+# no hardware 3D engine; run modesetting with ShadowFB, software cursor
+# and no KMS page-flipping so glamor/kms_swrast cannot exhaust small VM
+# VRAM bars or stall page flips.
 # (vmwgfx is intentionally NOT matched here so VMware and VirtualBox
 # VMSVGA keep xserver-xorg-video-vmware's native vmwgfx driver.)
 Section "OutputClass"
 	Identifier	"Linuxium VirtualBox Graphics KMS"
 	MatchDriver	"vboxvideo"
+	Driver		"modesetting"
+	Option		"AccelMethod" "none"
+	Option		"PageFlip" "false"
+	Option		"SWCursor" "true"
+EndSection
+
+Section "OutputClass"
+	Identifier	"Linuxium QEMU Standard VGA KMS"
+	MatchDriver	"bochs-drm"
 	Driver		"modesetting"
 	Option		"AccelMethod" "none"
 	Option		"PageFlip" "false"
@@ -1895,6 +1917,24 @@ set -e
 
 # Compile the dconf defaults
 dconf update
+
+# Pre-generate the default en_US.UTF-8 locale at build time so
+# live-config's 0050-locales ("locale-gen --keep-existing") returns
+# immediately on boot instead of compiling UTF-8 locale tables while
+# Plymouth waits on the splash screen, and so installed systems have a
+# valid UTF-8 locale ready out of the box.
+if [ -f /etc/locale.gen ]; then
+  sed -i -E 's/^#[[:space:]]*(en_US\.UTF-8[[:space:]]+UTF-8)/\1/' /etc/locale.gen
+  if ! grep -Eq '^en_US\.UTF-8[[:space:]]+UTF-8' /etc/locale.gen; then
+    printf 'en_US.UTF-8 UTF-8\n' >> /etc/locale.gen
+  fi
+  locale-gen
+fi
+if command -v update-locale >/dev/null 2>&1; then
+  update-locale LANG=en_US.UTF-8
+else
+  printf 'LANG=en_US.UTF-8\n' > /etc/default/locale
+fi
 
 # Branding (ID stays "debian" so tools - including Debian's signed GRUB
 # and the Calamares helpers, which look for the "bookworm" release -
