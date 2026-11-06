@@ -166,21 +166,40 @@ cat > config/package-lists/linuxium.list.chroot <<'EOF'
 # Init system: without these the live image can boot to
 # "No init found" because /sbin/init is missing from the squashfs.
 # Name the decisive pieces explicitly instead of trusting another
-# package's Depends/Recommends to keep bringing them along forever.
+# package's Depends/Recommends to keep bringing them along forever,
+# including PAM/logind session registration (uaccess ACLs on /dev/dri/*
+# and XDG_RUNTIME_DIR), session D-Bus, and Polkit.
 init
 systemd
 systemd-sysv
+libpam-systemd
 udev
 dbus
+dbus-user-session
+dbus-x11
+polkitd
+pkexec
 kmod
+procps
+psmisc
+pciutils
 initramfs-tools
 
-# Graphics: X server plus video/input drivers. Without these LightDM can
-# fail to start and the screen stays black (common in VMs)
+# Graphics: X server plus video/input drivers and Mesa runtime. Name the
+# critical VM and failsafe framebuffer drivers explicitly alongside
+# xserver-xorg-video-all so VMSVGA/VMware, QXL/SPICE, UEFI efifb and
+# BIOS VESA can never go missing.
 xorg
 xserver-xorg-video-all
+xserver-xorg-video-vmware
+xserver-xorg-video-qxl
+xserver-xorg-video-fbdev
+xserver-xorg-video-vesa
 xserver-xorg-input-all
 libgl1-mesa-dri
+libegl-mesa0
+libgbm1
+mesa-vulkan-drivers
 
 # Desktop
 cinnamon-desktop-environment
@@ -267,12 +286,17 @@ python3-gi
 gir1.2-gtk-3.0
 xdg-utils
 
-# Guest integration for testing in QEMU/KVM and SPICE viewers
+# Guest integration for QEMU/KVM, SPICE viewers and VMware hosts
+# (open-vm-tools units use ConditionVirtualization=vmware so they stay
+# completely inert on bare metal, VirtualBox and QEMU/KVM).
 qemu-guest-agent
 spice-vdagent
+open-vm-tools
+open-vm-tools-desktop
 
 # Branding
 plymouth
+plymouth-x11
 plymouth-themes
 plymouth-label
 neofetch
@@ -1267,37 +1291,43 @@ EOF
 # 8a. Permanent boot/graphics safeguards (present in the live image AND
 # in an installed system):
 #
-#  1. Early-boot graphics readiness + LightDM systemd drop-in:
-#     Bookworm's lightdm.service has Conflicts=plymouth-quit.service (so
-#     systemd cancels plymouth-quit.service and leaves plymouth-quit-wait
-#     waiting forever unless LightDM transitions or fails), lacks
-#     After=systemd-logind.service (so an early SeatNew failure in
-#     lightdm.c:login1_service_seat_added_cb is ignored and freezes on
-#     the Plymouth splash forever), and uses RestartSec=100ms (so 5 Xorg
-#     probes during kernel simpledrm -> real KMS GPU handoff burn out in
-#     500ms and strand the console on VT7 via -novtswitch). Ordering
-#     LightDM after systemd-logind, waiting in a bounded ExecStartPre
-#     helper for udev + KMS handoff, spacing retries to 2s, and adding an
-#     OnFailure VT1 fallback eliminates all of those splash hangs while
-#     preserving non-KMS / nomodeset bootability.
+#  1. Early-boot graphics readiness + clean Plymouth-to-Xorg handoff:
+#     Debian compiles Plymouth with --with-boot-tty=/dev/tty7, while
+#     Bookworm's lightdm.service declares Conflicts=plymouth-quit.service.
+#     When LightDM starts while plymouthd is still running on VT7,
+#     LightDM calls "plymouth deactivate" instead of "plymouth quit",
+#     leaving plymouthd alive with its 32bpp dumb buffers pinned in VRAM
+#     (exhausting 16 MiB VM VRAM bars on bochs-drm/vboxvideo/vmwgfx),
+#     leaving VT7 in KD_GRAPHICS mode, and leaving plymouth-quit-wait
+#     (TimeoutSec=0) blocked forever if Xorg stalls or fails.
+#     /usr/sbin/linuxium-wait-graphics waits (bounded) for udev + KMS
+#     handoff, refreshes session selection once /dev/dri/* has settled,
+#     and cleanly quits plymouthd right before LightDM spawns Xorg.
+#     Drop-ins also bound live-config.service (90s), plymouth-quit-wait
+#     (30s) and LightDM retries (5 attempts / 60s, RestartSec=2s) with
+#     an OnFailure VT1 getty fallback so no boot can hang on the splash.
 #
-#  2. Narrow Xorg OutputClass rules for VirtualBox's legacy vboxvideo KMS
-#     driver and QEMU/Bochs Standard VGA (bochs-drm, 16 MiB PCI VRAM)
-#     using ShadowFB without Glamor/PageFlip stalls or VRAM exhaustion.
-#     Crucially, do NOT force modesetting onto vmwgfx:
-#     xserver-xorg-video-vmware provides the native vmwgfx Xorg backend
-#     for both VMware and VirtualBox VMSVGA, whereas forcing modesetting
-#     + glamor + PageFlip onto vmwgfx causes black screens / splash hangs.
+#  2. Xorg OutputClass rules for non-3D / small-VRAM KMS drivers
+#     (vboxvideo, bochs-drm, cirrus, hyperv_drm, simpledrm, mgag200, ast)
+#     using modesetting + ShadowFB with AccelMethod=none, PageFlip=false
+#     and SWcursor=true so glamor/kms_swrast cannot exhaust small VRAM
+#     bars or stall page flips. Crucially, vmwgfx and qxl are NOT matched
+#     here so VMware / VirtualBox VMSVGA keep xserver-xorg-video-vmware
+#     and SPICE/QXL keeps xserver-xorg-video-qxl.
 #
-#  3. A tiny oneshot service that runs before LightDM every boot and
-#     selects Cinnamon's software-rendering session when (and only when)
-#     systemd/DMI say this is VirtualBox.
+#  3. Automatic software-rendering session safeguard
+#     (/usr/sbin/linuxium-virtualbox-graphics) that selects cinnamon2d
+#     whenever booting in a VM without hardware 3D / VirGL or on any
+#     system without a /dev/dri/renderD* 3D render node, while keeping
+#     full hardware-accelerated cinnamon on real Intel/AMD/NVIDIA GPUs.
 mkdir -p config/includes.chroot/usr/sbin
 cat > config/includes.chroot/usr/sbin/linuxium-wait-graphics <<'EOF'
 #!/bin/sh
 # Linuxium: wait (with strict upper bounds) for udev GPU coldplug,
-# simpledrm -> native KMS handoff, and systemd-logind seat readiness
-# before LightDM spawns Xorg. Every code path exits 0.
+# simpledrm -> native KMS handoff, and systemd-logind seat readiness,
+# refresh the Cinnamon 3D/2D session choice once /dev/dri/* is settled,
+# and cleanly quit Plymouth so VT7 and VRAM are 100% free before LightDM
+# spawns Xorg. Every code path exits 0.
 
 cmdline="$(cat /proc/cmdline 2>/dev/null || true)"
 nomodeset=0
@@ -1312,7 +1342,7 @@ done
 
 if command -v udevadm >/dev/null 2>&1
 then
-	udevadm settle --timeout=10 >/dev/null 2>&1 || true
+	udevadm settle --timeout=8 >/dev/null 2>&1 || true
 fi
 
 has_non_simpledrm_card()
@@ -1363,8 +1393,8 @@ has_unbound_pci_display()
 if [ "$nomodeset" = "0" ]
 then
 	# Poll up to 5s (25 * 0.2s) if a real KMS card is still replacing
-	# simpledrm or creating /dev/dri/card*. Break immediately once a
-	# real KMS card node exists.
+	# simpledrm or creating /dev/dri/card*. Break immediately (0s sleep)
+	# once a real KMS card node exists.
 	i=0
 	while [ "$i" -lt 25 ]
 	do
@@ -1386,9 +1416,9 @@ then
 		i=$((i + 1))
 	done
 
-	if command -v udevadm >/dev/null 2>&1
+	if [ "$i" -gt 0 ] && command -v udevadm >/dev/null 2>&1
 	then
-		udevadm settle --timeout=3 >/dev/null 2>&1 || true
+		udevadm settle --timeout=2 >/dev/null 2>&1 || true
 	fi
 fi
 
@@ -1406,6 +1436,34 @@ then
 	done
 fi
 
+# Re-evaluate 3D vs software-rendered Cinnamon now that udev and KMS
+# driver binding (/dev/dri/card*, /dev/dri/renderD*) have settled.
+if [ -x /usr/sbin/linuxium-virtualbox-graphics ]
+then
+	/usr/sbin/linuxium-virtualbox-graphics >/dev/null 2>&1 || true
+fi
+
+# Cleanly terminate Plymouth right before LightDM starts Xorg so
+# plymouthd releases DRM master, frees its 32bpp KMS dumb buffers in
+# VRAM, restores /dev/tty7 to KD_TEXT, and unblocks plymouth-quit-wait.
+if [ -x /bin/plymouth ] && /bin/plymouth --ping >/dev/null 2>&1
+then
+	/bin/plymouth quit >/dev/null 2>&1 || true
+	i=0
+	while [ "$i" -lt 15 ] && /bin/plymouth --ping >/dev/null 2>&1
+	do
+		sleep 0.2 2>/dev/null || sleep 1
+		i=$((i + 1))
+	done
+	if /bin/plymouth --ping >/dev/null 2>&1
+	then
+		pkill -TERM -x plymouthd >/dev/null 2>&1 || killall -TERM plymouthd >/dev/null 2>&1 || true
+		sleep 0.2 2>/dev/null || sleep 1
+		pkill -KILL -x plymouthd >/dev/null 2>&1 || killall -KILL plymouthd >/dev/null 2>&1 || true
+	fi
+	rm -f /run/plymouth/pid >/dev/null 2>&1 || true
+fi
+
 exit 0
 EOF
 chmod +x config/includes.chroot/usr/sbin/linuxium-wait-graphics
@@ -1414,7 +1472,7 @@ mkdir -p config/includes.chroot/etc/systemd/system/lightdm.service.d
 cat > config/includes.chroot/etc/systemd/system/lightdm.service.d/50-linuxium.conf <<'EOF'
 [Unit]
 Wants=dbus.service systemd-logind.service systemd-udev-trigger.service
-After=dbus.service systemd-logind.service systemd-udev-trigger.service linuxium-virtualbox-graphics.service
+After=dbus.service systemd-logind.service systemd-udev-trigger.service systemd-user-sessions.service linuxium-virtualbox-graphics.service
 OnFailure=linuxium-boot-fallback-vt.service
 StartLimitIntervalSec=60s
 StartLimitBurst=5
@@ -1422,6 +1480,19 @@ StartLimitBurst=5
 [Service]
 ExecStartPre=-/usr/sbin/linuxium-wait-graphics
 RestartSec=2s
+EOF
+
+mkdir -p config/includes.chroot/etc/systemd/system/plymouth-quit-wait.service.d
+cat > config/includes.chroot/etc/systemd/system/plymouth-quit-wait.service.d/50-linuxium.conf <<'EOF'
+[Service]
+TimeoutStartSec=30s
+ExecStopPost=-/bin/plymouth quit
+EOF
+
+mkdir -p config/includes.chroot/etc/systemd/system/live-config.service.d
+cat > config/includes.chroot/etc/systemd/system/live-config.service.d/50-linuxium.conf <<'EOF'
+[Service]
+TimeoutStartSec=90s
 EOF
 
 cat > config/includes.chroot/etc/systemd/system/linuxium-boot-fallback-vt.service <<'EOF'
@@ -1433,41 +1504,38 @@ After=plymouth-quit.service
 [Service]
 Type=oneshot
 ExecStart=-/bin/plymouth quit
+ExecStart=-/usr/bin/pkill -TERM -x plymouthd
+ExecStart=-/bin/kbd_mode -a -C /dev/tty1
 ExecStart=-/bin/chvt 1
 ExecStart=-/bin/systemctl --no-block start getty@tty1.service
 EOF
 
 mkdir -p config/includes.chroot/etc/X11/xorg.conf.d
 cat > config/includes.chroot/etc/X11/xorg.conf.d/20-linuxium-vm-kms.conf <<'EOF'
-# Linuxium: VirtualBox's legacy vboxvideo KMS driver and QEMU/Bochs
-# Standard VGA (bochs-drm, 16 MiB PCI VRAM in Bookworm's 6.1 kernel) have
-# no hardware 3D engine; run modesetting with ShadowFB, software cursor
-# and no KMS page-flipping so glamor/kms_swrast cannot exhaust small VM
+# Linuxium: non-3D / small-VRAM KMS drivers have no hardware 3D engine;
+# run modesetting with ShadowFB, software cursor, AccelMethod=none and
+# PageFlip=false so glamor/kms_swrast cannot exhaust 4-16 MiB VM/BMC
 # VRAM bars or stall page flips.
-# (vmwgfx is intentionally NOT matched here so VMware and VirtualBox
-# VMSVGA keep xserver-xorg-video-vmware's native vmwgfx driver.)
+# (vmwgfx and qxl are intentionally NOT matched here so VMware and
+# VirtualBox VMSVGA keep xserver-xorg-video-vmware and SPICE/QXL keeps
+# xserver-xorg-video-qxl.)
 Section "OutputClass"
-	Identifier	"Linuxium VirtualBox Graphics KMS"
-	MatchDriver	"vboxvideo"
+	Identifier	"Linuxium Non-3D KMS Safe Modesetting"
+	MatchDriver	"vboxvideo|bochs-drm|cirrus|hyperv_drm|simpledrm|mgag200|ast"
 	Driver		"modesetting"
 	Option		"AccelMethod" "none"
+	Option		"ShadowFB" "true"
 	Option		"PageFlip" "false"
-	Option		"SWCursor" "true"
-EndSection
-
-Section "OutputClass"
-	Identifier	"Linuxium QEMU Standard VGA KMS"
-	MatchDriver	"bochs-drm"
-	Driver		"modesetting"
-	Option		"AccelMethod" "none"
-	Option		"PageFlip" "false"
-	Option		"SWCursor" "true"
+	Option		"SWcursor" "true"
 EndSection
 EOF
 cat > config/includes.chroot/usr/sbin/linuxium-virtualbox-graphics <<'EOF'
 #!/bin/sh
-# Linuxium: keep VirtualBox on Cinnamon's software-rendering session.
-# This must never be able to break a boot: every path exits 0.
+# Linuxium: select Cinnamon's software-rendering session (cinnamon2d)
+# automatically in virtual machines lacking hardware 3D / VirGL and on
+# systems without a usable /dev/dri/renderD* 3D render node, while
+# keeping hardware-accelerated cinnamon on real 3D GPUs.
+# Every code path exits 0 so this can never block a boot.
 
 CONF="/etc/lightdm/lightdm.conf.d/91-linuxium-virtualbox.conf"
 MAIN_CONF="/etc/lightdm/lightdm.conf"
@@ -1573,14 +1641,63 @@ write_main_override()
 	commit_main_copy
 }
 
-is_virtualbox()
+has_render_node()
 {
-	virt="$(systemd-detect-virt 2>/dev/null || true)"
-	[ "$virt" = "oracle" ] && return 0
-
-	for dmi in product_name sys_vendor
+	for rnode in /dev/dri/renderD[0-9]*
 	do
-		if grep -qis "virtualbox" "/sys/devices/virtual/dmi/id/$dmi" 2>/dev/null
+		[ -c "$rnode" ] && return 0
+	done
+	return 1
+}
+
+has_hardware_3d_gpu()
+{
+	has_render_node || return 1
+
+	for card in /sys/class/drm/card[0-9]*
+	do
+		[ -e "$card" ] || continue
+		case "${card##*/}" in
+			*-*) continue ;;
+		esac
+		drv="$(readlink "$card/device/driver" 2>/dev/null || true)"
+		drv="${drv##*/}"
+		case "$drv" in
+			i915|xe|amdgpu|radeon|nouveau|nvidia|nvidia-drm|vc4|v3d|panfrost|lima|etnaviv|msm|tegra)
+				return 0
+				;;
+			virtio_gpu|virtio-pci)
+				# VirtIO GPU feature bit 0 (VIRTIO_GPU_F_VIRGL) is emitted
+				# as the first character of /sys/class/drm/cardN/device/features.
+				if [ -r "$card/device/features" ]
+				then
+					features="$(cat "$card/device/features" 2>/dev/null || true)"
+					case "$features" in
+						1*) return 0 ;;
+					esac
+				fi
+				;;
+		esac
+	done
+
+	return 1
+}
+
+is_virtual_machine()
+{
+	virt="$(systemd-detect-virt --vm 2>/dev/null || systemd-detect-virt 2>/dev/null || true)"
+	case "$virt" in
+		""|none)
+			;;
+		*)
+			return 0
+			;;
+	esac
+
+	for dmi in product_name sys_vendor board_vendor
+	do
+		if grep -Eqis "virtualbox|vmware|qemu|kvm|bochs|virtual machine|xen|parallels|bhyve" \
+			"/sys/devices/virtual/dmi/id/$dmi" 2>/dev/null
 		then
 			return 0
 		fi
@@ -1589,10 +1706,55 @@ is_virtualbox()
 	return 1
 }
 
+cmdline="$(cat /proc/cmdline 2>/dev/null || true)"
+
+needs_software_session()
+{
+	for param in $cmdline
+	do
+		case "$param" in
+			nomodeset|*.modeset=0|live-config.xorg-driver=vesa|xorg-driver=vesa|live-config.xorg-driver=fbdev|xorg-driver=fbdev)
+				return 0
+				;;
+		esac
+	done
+
+	if is_virtual_machine
+	then
+		# Keep hardware 3D in a VM only when a real physical GPU is
+		# passed through or VirtIO-GPU has VirGL 3D enabled.
+		has_hardware_3d_gpu && return 1
+		return 0
+	fi
+
+	# Bare metal without a 3D DRM render node (e.g. UEFI simpledrm,
+	# efifb/vesafb, or 2D server BMC graphics like ast/mgag200) must
+	# also use cinnamon2d so Clutter/Muffin does not stall or blank.
+	has_render_node || return 0
+
+	for card in /sys/class/drm/card[0-9]*
+	do
+		[ -e "$card" ] || continue
+		case "${card##*/}" in
+			*-*) continue ;;
+		esac
+		drv="$(readlink "$card/device/driver" 2>/dev/null || true)"
+		drv="${drv##*/}"
+		case "$drv" in
+			""|simpledrm|simple-framebuffer|bochs-drm|vboxvideo|qxl|cirrus|hyperv_drm|mgag200|ast|udl)
+				;;
+			*)
+				return 1
+				;;
+		esac
+	done
+
+	return 0
+}
+
 session=""
 
 # An explicit boot choice wins over automatic detection.
-cmdline="$(cat /proc/cmdline 2>/dev/null || true)"
 for parameter in $cmdline
 do
 	case "$parameter" in
@@ -1608,7 +1770,7 @@ do
 	esac
 done
 
-if [ -z "$session" ] && is_virtualbox
+if [ -z "$session" ] && needs_software_session
 then
 	session="cinnamon2d"
 fi
@@ -1654,7 +1816,7 @@ chmod +x config/includes.chroot/usr/sbin/linuxium-virtualbox-graphics
 mkdir -p config/includes.chroot/etc/systemd/system/multi-user.target.wants
 cat > config/includes.chroot/etc/systemd/system/linuxium-virtualbox-graphics.service <<'EOF'
 [Unit]
-Description=Linuxium VirtualBox graphics session safeguard
+Description=Linuxium VM and non-3D graphics session safeguard
 After=local-fs.target
 Before=display-manager.service lightdm.service
 ConditionPathExists=/usr/sbin/lightdm
@@ -1673,25 +1835,24 @@ ln -sf ../linuxium-virtualbox-graphics.service \
 # 8b. Live-only graphics safety net (runs at live boot via live-config;
 #     it writes only to the live overlay, never into an installed system).
 #
-# VirtualBox + Cinnamon's 3D compositor is a well-known black-screen combo:
-# X starts, the pointer moves, but the desktop never paints. This component
-#   * uses Cinnamon's software-rendering session ("cinnamon2d") when it
-#     detects VirtualBox, or when the boot line says linuxium-session=cinnamon2d
-#     (our failsafe boot entry does, together with nomodeset);
-#   * leaves X-driver selection to the permanent OutputClass file from
-#     section 8a, except when the user explicitly chose an X driver or
-#     nomodeset, in which case it hides that file for this live boot only;
-#   * keeps Cinnamon from going idle or activating its locked
-#     screensaver in this live session: its stock 15-minute idle lock
-#     would otherwise demand Debian live's preset password in the
-#     middle of testing or installing;
-#   * explicitly tells LightDM NOT to wait for logind's "graphical seat"
-#     flag. That check sounds safer, but on some VM graphics stacks the
-#     flag never becomes true even though X would work, leaving a booted
-#     system on a text console with LightDM idle. Plymouth has already
-#     brought the DRM driver up by this point on the live image.
-# Real hardware keeps the normal accelerated "cinnamon" session. To force
-# the 3D session in VirtualBox anyway, boot with:  linuxium-session=cinnamon
+# Virtual machines without hardware 3D / VirGL and non-3D framebuffers
+# need Cinnamon's software-rendering session ("cinnamon2d") so Muffin
+# runs with CLUTTER_PAINT=disable-culling and LIBGL_ALWAYS_SOFTWARE=1.
+# Session selection itself is delegated to /usr/sbin/linuxium-virtualbox-graphics
+# (and re-run inside linuxium-wait-graphics once udev/KMS settle), while
+# this live-config component:
+#   * configures live autologin and LightDM seat defaults in
+#     /etc/lightdm/lightdm.conf.d/90-linuxium-live.conf (honouring any
+#     explicit linuxium-session= / noautologin / username= boot options);
+#   * maintains /etc/X11/xorg.conf.d/20-linuxium-vm-kms.conf across
+#     persistent live boots, hiding it only when the user explicitly
+#     requested another X driver or nomodeset;
+#   * disables idle screen blanking and screensaver locking in the live
+#     session so the live desktop never locks with a hidden password
+#     mid-install;
+#   * keeps logind-check-graphical=false paired with linuxium-wait-graphics.
+# Real 3D hardware keeps the accelerated "cinnamon" session. To force 3D
+# inside a VM anyway, boot with:  linuxium-session=cinnamon
 LIVE_CFG_DIR="config/includes.chroot/lib/live/config"
 mkdir -p "$LIVE_CFG_DIR"
 cat > "$LIVE_CFG_DIR/0190-linuxium-graphics" <<'LIVEEOF'
@@ -1758,39 +1919,8 @@ Init ()
 	printf '%s' " linuxium-graphics"
 }
 
-IsVirtualBox ()
-{
-	_VIRT="$(systemd-detect-virt 2>/dev/null || true)"
-	if [ "${_VIRT}" = "oracle" ]
-	then
-		return 0
-	fi
-
-	for _DMI in product_name sys_vendor
-	do
-		if grep -qis "virtualbox" "/sys/devices/virtual/dmi/id/${_DMI}" 2>/dev/null
-		then
-			return 0
-		fi
-	done
-
-	return 1
-}
-
 Config ()
 {
-	_IS_VBOX=0
-	if IsVirtualBox
-	then
-		_IS_VBOX=1
-	fi
-
-	# VirtualBox gets the stable software-rendering session by default.
-	if [ -z "${LINUXIUM_SESSION}" ] && [ "${_IS_VBOX}" = "1" ]
-	then
-		LINUXIUM_SESSION="cinnamon2d"
-	fi
-
 	case "${LINUXIUM_SESSION}" in
 		cinnamon|cinnamon2d|"")
 			;;
@@ -1825,6 +1955,11 @@ Config ()
 		fi
 	} > /etc/lightdm/lightdm.conf.d/90-linuxium-live.conf
 
+	if [ -x /usr/sbin/linuxium-virtualbox-graphics ]
+	then
+		/usr/sbin/linuxium-virtualbox-graphics >/dev/null 2>&1 || true
+	fi
+
 	# X-driver choice itself is handled by the permanent, race-free
 	# OutputClass file installed in /etc/X11/xorg.conf.d. Hide it for
 	# this live boot only if the user explicitly chose another X driver
@@ -1840,29 +1975,21 @@ Config ()
 	else
 		mkdir -p "$(dirname "${_XORG_VM_CONF}")"
 		cat > "${_XORG_VM_CONF}" <<'XORGEOF'
-# Linuxium: VirtualBox's legacy vboxvideo KMS driver and QEMU/Bochs
-# Standard VGA (bochs-drm, 16 MiB PCI VRAM in Bookworm's 6.1 kernel) have
-# no hardware 3D engine; run modesetting with ShadowFB, software cursor
-# and no KMS page-flipping so glamor/kms_swrast cannot exhaust small VM
+# Linuxium: non-3D / small-VRAM KMS drivers have no hardware 3D engine;
+# run modesetting with ShadowFB, software cursor, AccelMethod=none and
+# PageFlip=false so glamor/kms_swrast cannot exhaust 4-16 MiB VM/BMC
 # VRAM bars or stall page flips.
-# (vmwgfx is intentionally NOT matched here so VMware and VirtualBox
-# VMSVGA keep xserver-xorg-video-vmware's native vmwgfx driver.)
+# (vmwgfx and qxl are intentionally NOT matched here so VMware and
+# VirtualBox VMSVGA keep xserver-xorg-video-vmware and SPICE/QXL keeps
+# xserver-xorg-video-qxl.)
 Section "OutputClass"
-	Identifier	"Linuxium VirtualBox Graphics KMS"
-	MatchDriver	"vboxvideo"
+	Identifier	"Linuxium Non-3D KMS Safe Modesetting"
+	MatchDriver	"vboxvideo|bochs-drm|cirrus|hyperv_drm|simpledrm|mgag200|ast"
 	Driver		"modesetting"
 	Option		"AccelMethod" "none"
+	Option		"ShadowFB" "true"
 	Option		"PageFlip" "false"
-	Option		"SWCursor" "true"
-EndSection
-
-Section "OutputClass"
-	Identifier	"Linuxium QEMU Standard VGA KMS"
-	MatchDriver	"bochs-drm"
-	Driver		"modesetting"
-	Option		"AccelMethod" "none"
-	Option		"PageFlip" "false"
-	Option		"SWCursor" "true"
+	Option		"SWcursor" "true"
 EndSection
 XORGEOF
 	fi
@@ -2115,11 +2242,14 @@ if [ -f binary/live/filesystem.squashfs ]; then
     "/usr/sbin/linuxium-wait-graphics" \
     "/usr/sbin/linuxium-virtualbox-graphics" \
     "/etc/systemd/system/lightdm.service.d/50-linuxium.conf" \
+    "/etc/systemd/system/plymouth-quit-wait.service.d/50-linuxium.conf" \
+    "/etc/systemd/system/live-config.service.d/50-linuxium.conf" \
     "/etc/systemd/system/linuxium-boot-fallback-vt.service" \
     "/etc/systemd/system/linuxium-virtualbox-graphics.service" \
     "/etc/systemd/system/multi-user.target.wants/linuxium-virtualbox-graphics.service" \
     "/etc/lightdm/lightdm.conf.d/50-linuxium.conf" \
     "/etc/X11/xorg.conf.d/20-linuxium-vm-kms.conf" \
+    "/etc/default/locale" \
     "/usr/share/initramfs-tools/hooks/cryptroot" \
     "/usr/share/plymouth/themes/linuxium/linuxium.plymouth" \
     "/usr/share/plymouth/themes/linuxium/linuxium.script" \
