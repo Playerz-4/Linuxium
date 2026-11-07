@@ -205,6 +205,8 @@ mesa-vulkan-drivers
 cinnamon-desktop-environment
 lightdm
 lightdm-gtk-greeter
+papirus-icon-theme
+librsvg2-common
 dmz-cursor-theme
 nemo
 gnome-terminal
@@ -239,10 +241,25 @@ amd64-microcode
 
 # Apps
 firefox-esr
+gimp
+inkscape
 libreoffice-writer
 libreoffice-calc
+libreoffice-impress
+evince
 vlc
+rhythmbox
 eog
+flameshot
+gnome-screenshot
+cheese
+gnome-calculator
+gnome-disk-utility
+baobab
+transmission-gtk
+synaptic
+gdebi
+htop
 
 # Graphical installer: Calamares + Debian's tested live configuration
 # (offline pool handling, EFI bootloader helpers, "install-debian" launcher).
@@ -437,9 +454,14 @@ if [ -d "$EXTRA_WALLPAPERS_DIR" ]; then
 fi
 
 # 5c. Wallpaper picker entries (Cinnamon reads the cinnamon- and
-#     gnome-background-properties directories; install both).
+#     gnome-background-properties directories; install both as linuxium.xml
+#     so cs_backgrounds.py names the sidebar category "Linuxium", and
+#     section 9 consolidates all package-provided wallpapers into this one
+#     category so individual GNOME wallpapers do not each create their own
+#     1-wallpaper category).
 for props in cinnamon-background-properties gnome-background-properties; do
   mkdir -p "config/includes.chroot/usr/share/$props"
+  rm -f "config/includes.chroot/usr/share/$props/linuxium-wallpapers.xml"
   {
     printf '%s\n' '<?xml version="1.0" encoding="UTF-8"?>'
     printf '%s\n' '<!DOCTYPE wallpapers SYSTEM "gnome-wp-list.dtd">'
@@ -452,11 +474,11 @@ for props in cinnamon-background-properties gnome-background-properties; do
       printf '  </wallpaper>\n'
     done
     printf '%s\n' '</wallpapers>'
-  } > "config/includes.chroot/usr/share/$props/linuxium-wallpapers.xml"
+  } > "config/includes.chroot/usr/share/$props/linuxium.xml"
 done
 echo "Wallpapers in this build: ${WP_FILES[*]}"
 
-# 5d. Logo for neofetch / pixmaps
+# 5d. Logo for neofetch, pixmaps, hicolor icon theme and taskbar menu button
 # Normalize the Neofetch copy to a real, reasonably small PNG flattened on
 # white instead of assuming the source file really is a PNG just because
 # its name ends in .png. Neofetch's image pipeline (ImageMagick + chafa)
@@ -466,6 +488,18 @@ mkdir -p config/includes.chroot/usr/share/linuxium config/includes.chroot/usr/sh
   -resize 512x512 -strip "PNG24:config/includes.chroot/usr/share/linuxium/logo.png"
 "${IM[@]}" "$LOGO" -auto-orient -resize 512x512 -strip \
   "PNG32:config/includes.chroot/usr/share/pixmaps/linuxium.png"
+# Trim outer transparent whitespace so the lynx fills the Cinnamon panel
+# start-menu button cleanly at 24-32 px instead of shrinking into padding.
+"${IM[@]}" "$LOGO" -auto-orient -trim +repage -background none \
+  -gravity center -resize 116x116 -extent 128x128 -strip \
+  "PNG32:config/includes.chroot/usr/share/linuxium/panel-icon.png"
+for icon_px in 16 24 32 48 64 128 256; do
+  icon_dir="config/includes.chroot/usr/share/icons/hicolor/${icon_px}x${icon_px}/apps"
+  mkdir -p "$icon_dir"
+  "${IM[@]}" "config/includes.chroot/usr/share/linuxium/panel-icon.png" \
+    -background none -resize "${icon_px}x${icon_px}" -strip \
+    "PNG32:${icon_dir}/linuxium.png"
+done
 
 # 5e. Boot splash (Plymouth theme using the logo + animated progress bar)
 PLY_DIR="config/includes.chroot/usr/share/plymouth/themes/linuxium"
@@ -845,7 +879,7 @@ Presentation
         Text {
             anchors.horizontalCenter: image3.horizontalCenter
             anchors.top: image3.bottom
-            text: qsTr("Firefox, LibreOffice and VLC are ready to go.<br/>" +
+            text: qsTr("Firefox, GIMP, Inkscape, LibreOffice and VLC are ready to go.<br/>" +
                   "Almost there...")
             wrapMode: Text.WordWrap
             width: 600
@@ -937,15 +971,16 @@ class Welcome(Gtk.Window):
             "<b>Try it first:</b> you are running Linuxium live from the ISO. "
             "Everything works, but nothing is saved when you reboot "
             "(unless you set up persistence).\n"
-            "<b>Install it:</b> press <i>Install Linuxium</i> and the "
-            "Calamares installer will walk you through language, keyboard, "
-            "disk and user setup, step by step.\n"
-            "<b>Explore:</b> Firefox, LibreOffice, VLC and the file manager "
-            "are ready in the menu at the bottom left.\n"
+            "<b>Install it:</b> press <i>Install Linuxium</i> (here or right "
+            "on the desktop) and the Calamares installer will walk you through "
+            "language, keyboard, disk and user setup, step by step.\n"
+            "<b>Explore:</b> Firefox, GIMP, Inkscape, LibreOffice, VLC and "
+            "the file manager are ready on the desktop, in the Lynx menu, or "
+            "via the taskbar Search Bar (<i>Super+S</i>).\n"
             "<b>Get online:</b> click the network icon in the panel to join "
             "Wi-Fi.\n"
-            "<b>Make it yours:</b> Settings &gt; Backgrounds has new "
-            "wallpapers, from New York City to a Nebula."
+            "<b>Make it yours:</b> Settings &gt; Backgrounds has all "
+            "wallpapers organized together in one Linuxium category."
         )
         info.set_line_wrap(True)
         info.set_xalign(0)
@@ -1217,7 +1252,657 @@ image; everything else is unaffected.
 EOF
 echo "Theme installed: $THEME_NAME (Cinnamon shell + GTK, from themes/$THEME_NAME)"
 
-# 6. Default settings: Cinnamon wallpaper via system-wide dconf defaults
+# 5k. Taskbar Search Bar applet (search-bar@linuxium): sits on the bottom
+#     panel immediately next to the Lynx menu icon and opens a modal,
+#     keyboard-focused search popup for applications, folders, settings
+#     and quick math calculations (click or press Super+S).
+SEARCH_APPLET_DIR="config/includes.chroot/usr/share/cinnamon/applets/search-bar@linuxium"
+mkdir -p "$SEARCH_APPLET_DIR"
+
+cat > "$SEARCH_APPLET_DIR/metadata.json" <<'EOF'
+{
+  "uuid": "search-bar@linuxium",
+  "name": "Linuxium Search Bar",
+  "description": "Search applications, folders, settings and quick math from the taskbar",
+  "icon": "edit-find",
+  "max-instances": -1
+}
+EOF
+
+cat > "$SEARCH_APPLET_DIR/stylesheet.css" <<'EOF'
+.linuxium-panel-search-box {
+  background-color: #2b2b2b;
+  border: 1px solid rgba(255, 255, 255, 0.14);
+  border-radius: 14px;
+  padding: 0px 11px;
+  margin: 4px 3px;
+  min-width: 175px;
+  spacing: 7px;
+}
+
+.linuxium-panel-search-box:hover {
+  background-color: #353535;
+  border: 1px solid rgba(255, 255, 255, 0.26);
+}
+
+.linuxium-panel-search-active,
+.linuxium-panel-search-active:hover {
+  background-color: #303030;
+  border: 1px solid #1565c0;
+}
+
+.linuxium-panel-search-compact {
+  min-width: 0px;
+  padding: 4px 6px;
+}
+
+.linuxium-panel-search-icon {
+  color: rgba(255, 255, 255, 0.82);
+}
+
+.linuxium-panel-search-label {
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 9.5pt;
+}
+
+.linuxium-search-popup {
+  padding: 10px 12px;
+  min-width: 390px;
+  spacing: 8px;
+}
+
+.linuxium-search-entry {
+  background-color: #1c1c1c;
+  color: #ffffff;
+  caret-color: #ffffff;
+  selection-background-color: #1565c0;
+  selected-color: #ffffff;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 8px;
+  padding: 7px 10px;
+  font-size: 10.5pt;
+  width: 360px;
+}
+
+.linuxium-search-entry:focus,
+.linuxium-search-entry:hover {
+  background-color: #161616;
+  color: #ffffff;
+  border: 1px solid #1565c0;
+}
+
+.linuxium-search-entry-icon {
+  color: rgba(255, 255, 255, 0.72);
+  icon-size: 15px;
+}
+
+.linuxium-search-section-title {
+  color: rgba(255, 255, 255, 0.56);
+  font-size: 8.5pt;
+  font-weight: bold;
+  padding: 2px 4px 0px 4px;
+}
+
+.linuxium-search-results {
+  spacing: 2px;
+}
+
+.linuxium-search-result {
+  padding: 6px 8px;
+  border-radius: 7px;
+  spacing: 10px;
+}
+
+.linuxium-search-result:hover,
+.linuxium-search-result-selected {
+  background-color: #1565c0;
+}
+
+.linuxium-search-result-title {
+  color: #ffffff;
+  font-weight: bold;
+  font-size: 9.8pt;
+}
+
+.linuxium-search-result-desc {
+  color: rgba(255, 255, 255, 0.72);
+  font-size: 8.5pt;
+}
+
+.linuxium-search-empty {
+  color: rgba(255, 255, 255, 0.56);
+  font-size: 9.5pt;
+  padding: 12px 6px;
+}
+EOF
+
+cat > "$SEARCH_APPLET_DIR/applet.js" <<'EOF'
+const Applet = imports.ui.applet;
+const Clutter = imports.gi.Clutter;
+const Gio = imports.gi.Gio;
+const GLib = imports.gi.GLib;
+const Main = imports.ui.main;
+const Mainloop = imports.mainloop;
+const PopupMenu = imports.ui.popupMenu;
+const St = imports.gi.St;
+const Util = imports.misc.util;
+
+const MAX_RESULTS = 8;
+const QUICK_LAUNCH_IDS = [
+    "install-linuxium.desktop",
+    "nemo.desktop",
+    "firefox-esr.desktop",
+    "gimp.desktop",
+    "org.gnome.Terminal.desktop",
+    "org.gnome.Calculator.desktop",
+    "cinnamon-settings.desktop",
+    "vlc.desktop"
+];
+
+function evaluateMath(raw) {
+    let expr = raw.replace(/\s+/g, "");
+    if (!expr || !/[+\-*/%]/.test(expr) || !/^[0-9+\-*/().%]+$/.test(expr)) {
+        return null;
+    }
+    let pos = 0;
+
+    function parseExpression() {
+        let val = parseTerm();
+        while (pos < expr.length && (expr[pos] === "+" || expr[pos] === "-")) {
+            let op = expr[pos++];
+            let rhs = parseTerm();
+            val = op === "+" ? val + rhs : val - rhs;
+        }
+        return val;
+    }
+
+    function parseTerm() {
+        let val = parseFactor();
+        while (pos < expr.length && (expr[pos] === "*" || expr[pos] === "/" || expr[pos] === "%")) {
+            let op = expr[pos++];
+            let rhs = parseFactor();
+            if ((op === "/" || op === "%") && rhs === 0) {
+                return NaN;
+            }
+            if (op === "*") val *= rhs;
+            else if (op === "/") val /= rhs;
+            else val %= rhs;
+        }
+        return val;
+    }
+
+    function parseFactor() {
+        if (expr[pos] === "+") {
+            pos++;
+            return parseFactor();
+        }
+        if (expr[pos] === "-") {
+            pos++;
+            return -parseFactor();
+        }
+        if (expr[pos] === "(") {
+            pos++;
+            let val = parseExpression();
+            if (expr[pos] !== ")") return NaN;
+            pos++;
+            return val;
+        }
+        let start = pos;
+        let dots = 0;
+        while (pos < expr.length && ((expr[pos] >= "0" && expr[pos] <= "9") || expr[pos] === ".")) {
+            if (expr[pos] === "." && ++dots > 1) return NaN;
+            pos++;
+        }
+        if (pos === start) return NaN;
+        return parseFloat(expr.slice(start, pos));
+    }
+
+    let result = parseExpression();
+    if (pos !== expr.length || !Number.isFinite(result)) {
+        return null;
+    }
+    if (String(result) === expr) {
+        return null;
+    }
+    return Number(result.toPrecision(12)).toString();
+}
+
+class LinuxiumSearchBarApplet extends Applet.Applet {
+    constructor(metadata, orientation, panelHeight, instanceId) {
+        super(orientation, panelHeight, instanceId);
+        this.setAllowedLayout(Applet.AllowedLayout.BOTH);
+        this.set_applet_tooltip(_("Search applications, folders and settings (Super+S)"));
+
+        this._orientation = orientation;
+        this._hotkeyName = "linuxium-search-bar-" + this.instance_id;
+        this._results = [];
+        this._selectedIndex = 0;
+
+        this.pillBox = new St.BoxLayout({
+            style_class: "linuxium-panel-search-box",
+            y_align: Clutter.ActorAlign.CENTER
+        });
+        this.panelIcon = new St.Icon({
+            icon_name: "edit-find-symbolic",
+            icon_type: St.IconType.SYMBOLIC,
+            icon_size: 14,
+            style_class: "linuxium-panel-search-icon",
+            y_align: Clutter.ActorAlign.CENTER
+        });
+        this.panelLabel = new St.Label({
+            text: _("Search..."),
+            style_class: "linuxium-panel-search-label",
+            y_align: Clutter.ActorAlign.CENTER
+        });
+        this.pillBox.add_child(this.panelIcon);
+        this.pillBox.add_child(this.panelLabel);
+        this.actor.add_child(this.pillBox);
+        this._syncOrientationLayout();
+
+        this.menuManager = new PopupMenu.PopupMenuManager(this);
+        this.menu = new Applet.AppletPopupMenu(this, orientation);
+        this.menuManager.addMenu(this.menu);
+
+        this.popupBox = new St.BoxLayout({
+            vertical: true,
+            style_class: "linuxium-search-popup"
+        });
+        this.menu.addActor(this.popupBox);
+
+        this.searchEntry = new St.Entry({
+            style_class: "linuxium-search-entry",
+            hint_text: _("Type here to search apps, folders or math..."),
+            track_hover: true,
+            can_focus: true
+        });
+        this._entryIcon = new St.Icon({
+            icon_name: "edit-find-symbolic",
+            icon_type: St.IconType.SYMBOLIC,
+            style_class: "linuxium-search-entry-icon"
+        });
+        this.searchEntry.set_secondary_icon(this._entryIcon);
+        this.searchEntry.connect("secondary-icon-clicked", () => {
+            if (this.searchEntry.get_text().length > 0) {
+                this.searchEntry.set_text("");
+            }
+        });
+        this.popupBox.add_child(this.searchEntry);
+
+        this.sectionLabel = new St.Label({
+            style_class: "linuxium-search-section-title",
+            text: _("Quick Launch")
+        });
+        this.popupBox.add_child(this.sectionLabel);
+
+        this.resultsBox = new St.BoxLayout({
+            vertical: true,
+            style_class: "linuxium-search-results"
+        });
+        this.popupBox.add_child(this.resultsBox);
+
+        this.entryText = this.searchEntry.clutter_text;
+        this.entryText.connect("text-changed", () => {
+            let text = this.searchEntry.get_text();
+            this._entryIcon.set_icon_name(text.length > 0 ? "edit-clear-symbolic" : "edit-find-symbolic");
+            this._updateResults(text);
+        });
+        this.entryText.connect("key-press-event", (_actor, event) => this._onKeyPress(event));
+
+        this.menu.connect("open-state-changed", (_menu, isOpen) => {
+            if (isOpen) {
+                this.pillBox.add_style_class_name("linuxium-panel-search-active");
+                this.searchEntry.set_text("");
+                this._entryIcon.set_icon_name("edit-find-symbolic");
+                this._updateResults("");
+                global.stage.set_key_focus(this.searchEntry);
+                Mainloop.idle_add(() => {
+                    if (this.menu && this.menu.isOpen) {
+                        global.stage.set_key_focus(this.searchEntry);
+                    }
+                    return GLib.SOURCE_REMOVE;
+                });
+            } else {
+                this.pillBox.remove_style_class_name("linuxium-panel-search-active");
+            }
+        });
+
+        try {
+            Main.keybindingManager.addHotKey(this._hotkeyName, "<Super>s", () => {
+                if (!Main.overview.visible && !Main.expo.visible) {
+                    this.menu.toggle();
+                }
+            });
+        } catch (e) {
+            global.logWarning("search-bar@linuxium: could not bind Super+S hotkey: " + e);
+        }
+    }
+
+    _syncOrientationLayout() {
+        let vertical = (this._orientation === St.Side.LEFT || this._orientation === St.Side.RIGHT);
+        if (vertical) {
+            this.panelLabel.hide();
+            this.pillBox.add_style_class_name("linuxium-panel-search-compact");
+        } else {
+            this.panelLabel.show();
+            this.pillBox.remove_style_class_name("linuxium-panel-search-compact");
+        }
+    }
+
+    on_orientation_changed(orientation) {
+        this._orientation = orientation;
+        this._syncOrientationLayout();
+    }
+
+    on_applet_clicked() {
+        this.menu.toggle();
+    }
+
+    on_applet_removed_from_panel() {
+        try {
+            Main.keybindingManager.removeHotKey(this._hotkeyName);
+        } catch (e) {
+            // Ignore if never bound
+        }
+    }
+
+    _isLiveBoot() {
+        if (GLib.file_test("/run/live/medium", GLib.FileTest.IS_DIR)) {
+            return true;
+        }
+        try {
+            let [ok, contents] = GLib.file_get_contents("/proc/cmdline");
+            if (ok && contents) {
+                let cmdline = imports.byteArray.toString(contents);
+                return cmdline.indexOf("boot=live") !== -1;
+            }
+        } catch (e) {
+            // Fall through
+        }
+        return false;
+    }
+
+    _collectApps() {
+        let liveBoot = this._isLiveBoot();
+        let all = Gio.AppInfo.get_all();
+        let items = [];
+        for (let i = 0; i < all.length; i++) {
+            let app = all[i];
+            if (!app.should_show()) continue;
+            let id = app.get_id() || "";
+            if (!liveBoot && id === "install-linuxium.desktop") continue;
+            let name = app.get_display_name() || app.get_name() || "";
+            if (!name) continue;
+            let desc = app.get_description() || "";
+            let exe = app.get_executable() || "";
+            let kw = "";
+            if (typeof app.get_keywords === "function") {
+                let klist = app.get_keywords();
+                if (klist && klist.length) kw = klist.join(" ");
+            }
+            items.push({
+                id: id,
+                title: name,
+                description: desc,
+                searchBlob: (name + " " + desc + " " + exe + " " + kw).toLowerCase(),
+                nameLower: name.toLowerCase(),
+                gicon: app.get_icon(),
+                iconName: "application-x-executable",
+                activate: () => {
+                    try {
+                        app.launch([], null);
+                    } catch (e) {
+                        global.logError("search-bar@linuxium: failed to launch " + id + ": " + e);
+                    }
+                }
+            });
+        }
+        return items;
+    }
+
+    _collectPlaces() {
+        let home = GLib.get_home_dir();
+        let defs = [
+            [_("Home"), home, "user-home"],
+            [_("Desktop"), GLib.build_filenamev([home, "Desktop"]), "user-desktop"],
+            [_("Downloads"), GLib.build_filenamev([home, "Downloads"]), "folder-download"],
+            [_("Documents"), GLib.build_filenamev([home, "Documents"]), "folder-documents"],
+            [_("Pictures"), GLib.build_filenamev([home, "Pictures"]), "folder-pictures"],
+            [_("Music"), GLib.build_filenamev([home, "Music"]), "folder-music"],
+            [_("Videos"), GLib.build_filenamev([home, "Videos"]), "folder-videos"]
+        ];
+        let out = [];
+        for (let i = 0; i < defs.length; i++) {
+            let [label, path, iconName] = defs[i];
+            if (!GLib.file_test(path, GLib.FileTest.IS_DIR)) continue;
+            out.push({
+                id: "place:" + path,
+                title: label,
+                description: path,
+                nameLower: label.toLowerCase(),
+                searchBlob: (label + " folder directory " + path).toLowerCase(),
+                gicon: null,
+                iconName: iconName,
+                activate: () => {
+                    Util.spawn(["nemo", path]);
+                }
+            });
+        }
+        return out;
+    }
+
+    _updateResults(rawQuery) {
+        this.resultsBox.destroy_all_children();
+        this._results = [];
+        this._selectedIndex = 0;
+
+        let query = (rawQuery || "").trim().toLowerCase();
+        let apps = this._collectApps();
+
+        if (!query) {
+            this.sectionLabel.set_text(_("Quick Launch"));
+            let byId = {};
+            for (let i = 0; i < apps.length; i++) {
+                if (apps[i].id) byId[apps[i].id] = apps[i];
+            }
+            let chosen = [];
+            let used = {};
+            for (let i = 0; i < QUICK_LAUNCH_IDS.length && chosen.length < MAX_RESULTS; i++) {
+                let id = QUICK_LAUNCH_IDS[i];
+                if (byId[id] && !used[id]) {
+                    chosen.push(byId[id]);
+                    used[id] = true;
+                }
+            }
+            for (let i = 0; i < apps.length && chosen.length < MAX_RESULTS; i++) {
+                let id = apps[i].id || apps[i].title;
+                if (!used[id]) {
+                    chosen.push(apps[i]);
+                    used[id] = true;
+                }
+            }
+            this._renderItems(chosen);
+            return;
+        }
+
+        this.sectionLabel.set_text(_("Best Matches"));
+        let scored = [];
+
+        let mathAnswer = evaluateMath(rawQuery);
+        if (mathAnswer !== null) {
+            scored.push({
+                score: 1000,
+                item: {
+                    id: "calc",
+                    title: rawQuery.trim() + " = " + mathAnswer,
+                    description: _("Press Enter to copy result to clipboard"),
+                    gicon: null,
+                    iconName: "accessories-calculator",
+                    activate: () => {
+                        St.Clipboard.get_default().set_text(St.ClipboardType.CLIPBOARD, mathAnswer);
+                    }
+                }
+            });
+        }
+
+        let candidates = apps.concat(this._collectPlaces());
+        let tokens = query.split(/\s+/).filter(Boolean);
+
+        for (let i = 0; i < candidates.length; i++) {
+            let item = candidates[i];
+            let allMatch = true;
+            for (let t = 0; t < tokens.length; t++) {
+                if (item.searchBlob.indexOf(tokens[t]) === -1) {
+                    allMatch = false;
+                    break;
+                }
+            }
+            if (!allMatch) continue;
+
+            let score = 10;
+            if (item.nameLower === query) score = 500;
+            else if (item.nameLower.indexOf(query) === 0) score = 350;
+            else if (item.nameLower.indexOf(" " + query) !== -1) score = 250;
+            else if (item.nameLower.indexOf(query) !== -1) score = 180;
+            scored.push({ score: score, item: item });
+        }
+
+        scored.sort((a, b) => {
+            if (b.score !== a.score) return b.score - a.score;
+            return a.item.title.localeCompare(b.item.title);
+        });
+
+        let topItems = scored.slice(0, MAX_RESULTS).map(entry => entry.item);
+        if (topItems.length === 0) {
+            let emptyLabel = new St.Label({
+                style_class: "linuxium-search-empty",
+                text: _('No matches found for "%s"').format(rawQuery.trim())
+            });
+            this.resultsBox.add_child(emptyLabel);
+            return;
+        }
+
+        this._renderItems(topItems);
+    }
+
+    _renderItems(items) {
+        for (let i = 0; i < items.length; i++) {
+            let item = items[i];
+            let row = new St.BoxLayout({
+                style_class: "linuxium-search-result",
+                reactive: true,
+                track_hover: true,
+                x_expand: true
+            });
+
+            let iconActor;
+            if (item.gicon) {
+                iconActor = St.TextureCache.get_default().load_gicon(null, item.gicon, 28);
+            } else {
+                iconActor = new St.Icon({
+                    icon_name: item.iconName || "application-x-executable",
+                    icon_type: St.IconType.FULLCOLOR,
+                    icon_size: 28
+                });
+            }
+            iconActor.set_y_align(Clutter.ActorAlign.CENTER);
+            row.add_child(iconActor);
+
+            let textCol = new St.BoxLayout({
+                vertical: true,
+                y_align: Clutter.ActorAlign.CENTER,
+                x_expand: true
+            });
+            let titleLabel = new St.Label({
+                style_class: "linuxium-search-result-title",
+                text: item.title
+            });
+            textCol.add_child(titleLabel);
+
+            if (item.description) {
+                let shortDesc = item.description.length > 56
+                    ? item.description.slice(0, 55) + "\u2026"
+                    : item.description;
+                let descLabel = new St.Label({
+                    style_class: "linuxium-search-result-desc",
+                    text: shortDesc
+                });
+                textCol.add_child(descLabel);
+            }
+            row.add_child(textCol);
+
+            let idx = i;
+            row.connect("enter-event", () => {
+                this._setSelectedIndex(idx);
+            });
+            row.connect("button-release-event", (_actor, event) => {
+                if (event.get_button() === 1) {
+                    this._activateIndex(idx);
+                    return Clutter.EVENT_STOP;
+                }
+                return Clutter.EVENT_PROPAGATE;
+            });
+
+            this.resultsBox.add_child(row);
+            this._results.push({ row: row, item: item });
+        }
+        this._setSelectedIndex(0);
+    }
+
+    _setSelectedIndex(index) {
+        if (this._results.length === 0) return;
+        let clamped = Math.max(0, Math.min(index, this._results.length - 1));
+        this._selectedIndex = clamped;
+        for (let i = 0; i < this._results.length; i++) {
+            if (i === clamped) {
+                this._results[i].row.add_style_class_name("linuxium-search-result-selected");
+            } else {
+                this._results[i].row.remove_style_class_name("linuxium-search-result-selected");
+            }
+        }
+    }
+
+    _activateIndex(index) {
+        if (index < 0 || index >= this._results.length) return;
+        let target = this._results[index].item;
+        this.menu.close(true);
+        target.activate();
+    }
+
+    _onKeyPress(event) {
+        let symbol = event.get_key_symbol();
+        if (symbol === Clutter.KEY_Escape) {
+            this.menu.close(true);
+            return Clutter.EVENT_STOP;
+        }
+        if (symbol === Clutter.KEY_Down || symbol === Clutter.KEY_Tab) {
+            if (this._results.length > 0) {
+                this._setSelectedIndex((this._selectedIndex + 1) % this._results.length);
+            }
+            return Clutter.EVENT_STOP;
+        }
+        if (symbol === Clutter.KEY_Up || symbol === Clutter.KEY_ISO_Left_Tab) {
+            if (this._results.length > 0) {
+                this._setSelectedIndex((this._selectedIndex - 1 + this._results.length) % this._results.length);
+            }
+            return Clutter.EVENT_STOP;
+        }
+        if (symbol === Clutter.KEY_Return || symbol === Clutter.KEY_KP_Enter) {
+            if (this._results.length > 0) {
+                this._activateIndex(this._selectedIndex);
+            }
+            return Clutter.EVENT_STOP;
+        }
+        return Clutter.EVENT_PROPAGATE;
+    }
+}
+
+function main(metadata, orientation, panelHeight, instanceId) {
+    return new LinuxiumSearchBarApplet(metadata, orientation, panelHeight, instanceId);
+}
+EOF
+
+# 6. Default settings: Cinnamon wallpaper, CBlack + Papirus-Dark themes,
+#    Lynx taskbar menu icon, Taskbar Search Bar applet, and desktop icons
 mkdir -p config/includes.chroot/etc/dconf/profile
 mkdir -p config/includes.chroot/etc/dconf/db/local.d
 
@@ -1234,9 +1919,22 @@ primary-color='#525252'
 secondary-color='#525252'
 color-shading-type='solid'
 
+[org/cinnamon/desktop/background/slideshow]
+image-source='xml:///usr/share/gnome-background-properties/linuxium.xml'
+
 [org/cinnamon/desktop/interface]
 gtk-theme='CBlack'
+icon-theme='Papirus-Dark'
 cursor-theme='DMZ-Black'
+
+[org/gnome/desktop/interface]
+gtk-theme='CBlack'
+icon-theme='Papirus-Dark'
+cursor-theme='DMZ-Black'
+color-scheme='prefer-dark'
+
+[org/nemo/desktop]
+show-desktop-icons=true
 
 # Cinnamon SHELL theme. This key is only safe to set because CBlack
 # (section 5j) really ships cinnamon/cinnamon.css - pointing it at a
@@ -1252,6 +1950,25 @@ name='CBlack'
 # metacity-1 theme (its index.theme declares MetacityTheme=CBlack).
 [org/cinnamon/desktop/wm/preferences]
 theme='CBlack'
+
+# Taskbar layout: Lynx menu icon on the far left, followed immediately by
+# the Linuxium Search Bar applet, separator, and grouped window list.
+[org/cinnamon]
+app-menu-icon-name='linuxium'
+app-menu-label=''
+enabled-applets=['panel1:left:0:menu@cinnamon.org', 'panel1:left:1:search-bar@linuxium', 'panel1:left:2:separator@cinnamon.org', 'panel1:left:3:grouped-window-list@cinnamon.org', 'panel1:right:0:systray@cinnamon.org', 'panel1:right:1:xapp-status@cinnamon.org', 'panel1:right:2:notifications@cinnamon.org', 'panel1:right:3:printers@cinnamon.org', 'panel1:right:4:removable-drives@cinnamon.org', 'panel1:right:5:keyboard@cinnamon.org', 'panel1:right:6:favorites@cinnamon.org', 'panel1:right:7:network@cinnamon.org', 'panel1:right:8:sound@cinnamon.org', 'panel1:right:9:power@cinnamon.org', 'panel1:right:10:calendar@cinnamon.org', 'panel1:right:11:cornerbar@cinnamon.org']
+favorite-apps=['firefox-esr.desktop', 'nemo.desktop', 'gimp.desktop', 'org.gnome.Terminal.desktop', 'cinnamon-settings.desktop', 'libreoffice-writer.desktop', 'vlc.desktop']
+EOF
+
+# Keep root/pkexec GTK3 tools (Calamares helpers, GParted, Synaptic, GDebi)
+# matched to CBlack + Papirus-Dark as well.
+mkdir -p config/includes.chroot/etc/gtk-3.0
+cat > config/includes.chroot/etc/gtk-3.0/settings.ini <<'EOF'
+[Settings]
+gtk-theme-name=CBlack
+gtk-icon-theme-name=Papirus-Dark
+gtk-cursor-theme-name=DMZ-Black
+gtk-application-prefer-dark-theme=1
 EOF
 
 # 7. Login screen background
@@ -1263,7 +1980,7 @@ user-background=false
 # Match the session theme (section 5j/6); dconf defaults do not apply
 # to the greeter's own user, so set its GTK/icon/cursor themes explicitly.
 theme-name=CBlack
-icon-theme-name=Adwaita
+icon-theme-name=Papirus-Dark
 cursor-theme-name=DMZ-Black
 # Put the login window on the monitor that actually has the pointer;
 # harmless on one screen, avoids an "empty" looking second screen in VMs.
@@ -2025,6 +2742,35 @@ DCONFEOF
 		dconf update 2>/dev/null || true
 	fi
 
+	# Populate the live user's Desktop with trusted launchers for Install
+	# Linuxium, the File Browser (Nemo) and Firefox. Nemo marks ~/Desktop
+	# launchers trusted when their executable bit (0755) is set, avoiding
+	# any "Untrusted application launcher" prompt on first click. Placing
+	# install-linuxium.desktop here (rather than in /etc/skel/Desktop)
+	# keeps the installer shortcut on the live desktop without leaving a
+	# dead installer icon behind on installed systems.
+	if [ -n "${LINUXIUM_LIVE_USER}" ]
+	then
+		_LIVE_HOME="$(getent passwd "${LINUXIUM_LIVE_USER}" 2>/dev/null | cut -d: -f6 || true)"
+		if [ -z "${_LIVE_HOME}" ] && [ -d "/home/${LINUXIUM_LIVE_USER}" ]
+		then
+			_LIVE_HOME="/home/${LINUXIUM_LIVE_USER}"
+		fi
+		if [ -n "${_LIVE_HOME}" ] && [ -d "${_LIVE_HOME}" ]
+		then
+			mkdir -p "${_LIVE_HOME}/Desktop"
+			for _DESK_APP in install-linuxium.desktop nemo.desktop firefox-esr.desktop
+			do
+				if [ -f "/usr/share/applications/${_DESK_APP}" ]
+				then
+					cp -f "/usr/share/applications/${_DESK_APP}" "${_LIVE_HOME}/Desktop/${_DESK_APP}"
+					chmod 0755 "${_LIVE_HOME}/Desktop/${_DESK_APP}"
+				fi
+			done
+			chown -R "${LINUXIUM_LIVE_USER}:${LINUXIUM_LIVE_USER}" "${_LIVE_HOME}/Desktop" 2>/dev/null || true
+		fi
+	fi
+
 	# Creating state file
 	touch /var/lib/live/config/linuxium-graphics
 }
@@ -2178,6 +2924,165 @@ if [ -f /etc/xdg/autostart/calamares-desktop-icon.desktop ]; then
   printf '\nHidden=true\n' >> /etc/xdg/autostart/calamares-desktop-icon.desktop
 fi
 
+# Desktop launchers for every new user (both live and installed systems):
+# File Browser (Nemo) and Firefox, marked executable (0755) so Nemo treats
+# them as trusted launchers immediately. (The live-only "Install Linuxium"
+# desktop icon is added at live boot by 0190-linuxium-graphics so it never
+# lingers on an installed system's desktop.)
+mkdir -p /etc/skel/Desktop
+for skel_app in nemo.desktop firefox-esr.desktop; do
+  if [ -f "/usr/share/applications/$skel_app" ]; then
+    cp -f "/usr/share/applications/$skel_app" "/etc/skel/Desktop/$skel_app"
+    chmod 0755 "/etc/skel/Desktop/$skel_app"
+  fi
+done
+
+# Consolidate all wallpaper XML manifests into ONE "Linuxium" category in
+# Cinnamon Settings -> Backgrounds (gnome-backgrounds 43 otherwise ships
+# 20+ separate 1-wallpaper XML files that each create their own sidebar
+# category), and set Cinnamon's taskbar menu icon (Lynx) and pinned apps.
+python3 - <<'PYHOOK'
+import json
+import mimetypes
+import os
+import pathlib
+import xml.etree.ElementTree as ET
+
+prop_dirs = [
+    pathlib.Path("/usr/share/gnome-background-properties"),
+    pathlib.Path("/usr/share/cinnamon-background-properties"),
+]
+
+xml_sources = []
+for d in prop_dirs:
+    primary = d / "linuxium.xml"
+    if primary.exists():
+        xml_sources.append(primary)
+for d in prop_dirs:
+    if d.is_dir():
+        for p in sorted(d.glob("*.xml")):
+            if p.name != "linuxium.xml":
+                xml_sources.append(p)
+
+merged_items = []
+seen_files = set()
+
+for src in xml_sources:
+    try:
+        tree = ET.parse(src)
+    except Exception:
+        continue
+    root = tree.getroot()
+    if root.tag != "wallpapers":
+        continue
+    for wp in root.findall("wallpaper"):
+        if wp.get("deleted") == "true":
+            continue
+        fn_el = wp.find("filename")
+        if fn_el is None or not fn_el.text:
+            continue
+        fname = fn_el.text.strip()
+        if not fname.startswith("/") or fname.lower().endswith(".xml"):
+            continue
+        if not os.path.isfile(fname):
+            continue
+        mime = mimetypes.guess_type(fname)[0]
+        if not mime or not mime.startswith("image/"):
+            real = os.path.realpath(fname)
+            real_mime = mimetypes.guess_type(real)[0]
+            if not real_mime or not real_mime.startswith("image/"):
+                continue
+            fname = real
+        if fname in seen_files:
+            continue
+        seen_files.add(fname)
+
+        name_el = wp.find("name")
+        name = (name_el.text or "").strip() if name_el is not None else ""
+        if not name:
+            name = pathlib.Path(fname).stem.replace("-", " ").replace("_", " ").title()
+        opts = (wp.findtext("options") or "zoom").strip()
+        pcolor = (wp.findtext("pcolor") or "#525252").strip()
+        scolor = (wp.findtext("scolor") or "#525252").strip()
+        shade = (wp.findtext("shade_type") or "solid").strip()
+        merged_items.append((name, fname, opts, pcolor, scolor, shade))
+
+def xml_esc(text):
+    return (
+        text.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+    )
+
+if merged_items:
+    lines = [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<!DOCTYPE wallpapers SYSTEM "gnome-wp-list.dtd">',
+        "<wallpapers>",
+    ]
+    for name, fname, opts, pcolor, scolor, shade in merged_items:
+        lines.extend([
+            '  <wallpaper deleted="false">',
+            f"    <name>{xml_esc(name)}</name>",
+            f"    <filename>{xml_esc(fname)}</filename>",
+            f"    <options>{xml_esc(opts)}</options>",
+            f"    <pcolor>{xml_esc(pcolor)}</pcolor>",
+            f"    <scolor>{xml_esc(scolor)}</scolor>",
+            f"    <shade_type>{xml_esc(shade)}</shade_type>",
+            "  </wallpaper>",
+        ])
+    lines.append("</wallpapers>")
+    payload = "\n".join(lines) + "\n"
+
+    for d in prop_dirs:
+        d.mkdir(parents=True, exist_ok=True)
+        for old_xml in list(d.glob("*.xml")):
+            if old_xml.name != "linuxium.xml":
+                old_xml.unlink(missing_ok=True)
+        (d / "linuxium.xml").write_text(payload, encoding="utf-8")
+
+menu_schema = pathlib.Path("/usr/share/cinnamon/applets/menu@cinnamon.org/settings-schema.json")
+if menu_schema.is_file():
+    data = json.loads(menu_schema.read_text(encoding="utf-8"))
+    if "menu-custom" in data and isinstance(data["menu-custom"], dict):
+        data["menu-custom"]["default"] = True
+    if "menu-icon" in data and isinstance(data["menu-icon"], dict):
+        data["menu-icon"]["default"] = "/usr/share/linuxium/panel-icon.png"
+        if "default_icon" in data["menu-icon"]:
+            data["menu-icon"]["default_icon"] = "/usr/share/linuxium/panel-icon.png"
+    if "menu-icon-size" in data and isinstance(data["menu-icon-size"], dict):
+        data["menu-icon-size"]["default"] = 28
+    if "menu-label" in data and isinstance(data["menu-label"], dict):
+        data["menu-label"]["default"] = ""
+    menu_schema.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+
+gwl_schema = pathlib.Path("/usr/share/cinnamon/applets/grouped-window-list@cinnamon.org/settings-schema.json")
+if gwl_schema.is_file():
+    gwl = json.loads(gwl_schema.read_text(encoding="utf-8"))
+    desired_pins = [
+        app_id for app_id in (
+            "nemo.desktop",
+            "firefox-esr.desktop",
+            "gimp.desktop",
+            "org.gnome.Terminal.desktop",
+        )
+        if pathlib.Path("/usr/share/applications", app_id).is_file()
+    ]
+    if desired_pins and "pinned-apps" in gwl and isinstance(gwl["pinned-apps"], dict):
+        gwl["pinned-apps"]["default"] = desired_pins
+        gwl_schema.write_text(json.dumps(gwl, indent=2) + "\n", encoding="utf-8")
+PYHOOK
+
+if command -v gtk-update-icon-cache >/dev/null 2>&1; then
+  for icon_root in /usr/share/icons/hicolor /usr/share/icons/Papirus /usr/share/icons/Papirus-Dark; do
+    if [ -d "$icon_root" ]; then
+      gtk-update-icon-cache -q -f -t "$icon_root" || true
+    fi
+  done
+fi
+dconf update
+
 # Installed-system GRUB defaults: name, quiet splash boot, and the
 # Linuxium wallpaper as the GRUB background (update-grub copies it in).
 if [ -f /etc/default/grub ]; then
@@ -2235,7 +3140,7 @@ done
 if [ -f binary/live/filesystem.squashfs ]; then
   ROOTFS_LISTING="$("${SUDO[@]}" unsquashfs -ll binary/live/filesystem.squashfs 2>/dev/null || true)"
   for root_part in \
-    "/sbin/init" "/usr/sbin/lightdm" "/usr/bin/calamares" \
+    "/sbin/init" "/usr/sbin/lightdm" "/usr/bin/calamares" "/usr/bin/gimp" \
     "/usr/share/xsessions/cinnamon.desktop" \
     "/usr/share/xsessions/cinnamon2d.desktop" \
     "/live/config/0190-linuxium-graphics" \
@@ -2255,6 +3160,15 @@ if [ -f binary/live/filesystem.squashfs ]; then
     "/usr/share/plymouth/themes/linuxium/linuxium.script" \
     "/usr/share/plymouth/themes/linuxium/progress-track.png" \
     "/usr/share/plymouth/themes/linuxium/progress-bar.png" \
+    "/usr/share/linuxium/panel-icon.png" \
+    "/usr/share/icons/Papirus-Dark/index.theme" \
+    "/usr/share/cinnamon/applets/search-bar@linuxium/applet.js" \
+    "/usr/share/cinnamon/applets/search-bar@linuxium/metadata.json" \
+    "/usr/share/cinnamon/applets/search-bar@linuxium/stylesheet.css" \
+    "/usr/share/gnome-background-properties/linuxium.xml" \
+    "/usr/share/cinnamon-background-properties/linuxium.xml" \
+    "/etc/skel/Desktop/nemo.desktop" \
+    "/etc/skel/Desktop/firefox-esr.desktop" \
     "/usr/share/themes/CBlack/index.theme" \
     "/usr/share/themes/CBlack/cinnamon/cinnamon.css" \
     "/usr/share/themes/CBlack/gtk-3.0/gtk.css" \
