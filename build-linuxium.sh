@@ -479,18 +479,38 @@ done
 echo "Wallpapers in this build: ${WP_FILES[*]}"
 
 # 5d. Logo for neofetch, pixmaps, hicolor icon theme and taskbar menu button
-# Normalize the Neofetch copy to a real, reasonably small PNG flattened on
-# white instead of assuming the source file really is a PNG just because
-# its name ends in .png. Neofetch's image pipeline (ImageMagick + chafa)
-# is much happier with this, and the lynx stays visible on dark terminals.
+# Preserve RGBA transparency (PNG32 with -background none) so Neofetch's
+# chafa backend renders the Lynx directly over the terminal background
+# without an opaque white square. If a custom source logo has an opaque
+# pure-white outer background, floodfill only the outer corners to
+# transparent so interior white details (eye/belly) stay intact.
 mkdir -p config/includes.chroot/usr/share/linuxium config/includes.chroot/usr/share/pixmaps
-"${IM[@]}" "$LOGO" -auto-orient -background white -alpha remove -alpha off \
-  -resize 512x512 -strip "PNG24:config/includes.chroot/usr/share/linuxium/logo.png"
-"${IM[@]}" "$LOGO" -auto-orient -resize 512x512 -strip \
+LOGO_CORNER="$("${IM[@]}" "$LOGO" -auto-orient -format '%[fx:p{0,0}.a>0.95 && p{0,0}.r>0.96 && p{0,0}.g>0.96 && p{0,0}.b>0.96 ? 1 : 0]' info: 2>/dev/null || echo 0)"
+if [ "$LOGO_CORNER" = "1" ]; then
+  LOGO_DIMS="$("${IM[@]}" "$LOGO" -auto-orient -format '%wx%h' info:)"
+  LOGO_MAX_X=$(( ${LOGO_DIMS%x*} - 1 ))
+  LOGO_MAX_Y=$(( ${LOGO_DIMS#*x} - 1 ))
+  "${IM[@]}" "$LOGO" -auto-orient -alpha set -fuzz 6% -fill none \
+    -draw "matte 0,0 floodfill" \
+    -draw "matte ${LOGO_MAX_X},0 floodfill" \
+    -draw "matte 0,${LOGO_MAX_Y} floodfill" \
+    -draw "matte ${LOGO_MAX_X},${LOGO_MAX_Y} floodfill" \
+    -trim +repage -background none -gravity center \
+    -resize 460x460 -extent 512x512 -strip \
+    "PNG32:config/includes.chroot/usr/share/linuxium/logo.png"
+else
+  "${IM[@]}" "$LOGO" -auto-orient -alpha set \
+    -trim +repage -background none -gravity center \
+    -resize 460x460 -extent 512x512 -strip \
+    "PNG32:config/includes.chroot/usr/share/linuxium/logo.png"
+fi
+"${IM[@]}" "config/includes.chroot/usr/share/linuxium/logo.png" \
+  -background none -resize 512x512 -strip \
   "PNG32:config/includes.chroot/usr/share/pixmaps/linuxium.png"
 # Trim outer transparent whitespace so the lynx fills the Cinnamon panel
 # start-menu button cleanly at 24-32 px instead of shrinking into padding.
-"${IM[@]}" "$LOGO" -auto-orient -trim +repage -background none \
+"${IM[@]}" "config/includes.chroot/usr/share/linuxium/logo.png" \
+  -trim +repage -background none \
   -gravity center -resize 116x116 -extent 128x128 -strip \
   "PNG32:config/includes.chroot/usr/share/linuxium/panel-icon.png"
 for icon_px in 16 24 32 48 64 128 256; do
@@ -1105,6 +1125,19 @@ case " $(cat /proc/cmdline 2>/dev/null) " in
   *" boot=live "*) : ;;
   *) [ -d /run/live/medium ] || exit 0 ;;
 esac
+
+# Mark desktop shortcuts trusted in GVFS as well so Nemo/GIO never show a
+# lock or untrusted-launcher prompt in the live session.
+if [ -d "$HOME/Desktop" ]; then
+  for _desk_file in "$HOME/Desktop"/*.desktop; do
+    [ -f "$_desk_file" ] || continue
+    chmod +x "$_desk_file" 2>/dev/null || true
+    if command -v gio >/dev/null 2>&1; then
+      gio set --type=string "$_desk_file" metadata::trusted true 2>/dev/null || true
+    fi
+  done
+fi
+
 [ -e "$HOME/.config/linuxium/no-welcome" ] && exit 0
 lock="${XDG_RUNTIME_DIR:-/tmp}/linuxium-welcome.lock"
 mkdir "$lock" 2>/dev/null || exit 0
@@ -1122,14 +1155,50 @@ chmod +x "$BIN_INC/linuxium-welcome-autostart"
 
 cat > "$BIN_INC/install-linuxium" <<'EOF'
 #!/bin/sh
-# Preferred entry point is Debian's wrapper (handles the stale live
-# /etc/fstab, X access for root and HiDPI scaling, then runs
-# "pkexec calamares"). Fall back to plain pkexec if it is missing.
-if [ -x /usr/bin/install-debian ]; then
-  exec /usr/bin/install-debian
-fi
 export QT_AUTO_SCREEN_SCALE_FACTOR=1
-exec pkexec calamares
+
+# In the live session, 0040-sudo grants passwordless sudo, whereas
+# Bookworm's live-config + polkitd can prompt pkexec for the hidden live
+# password (Debian bug #1037295). When passwordless sudo is available,
+# handle X11 root access and stale live /etc/fstab directly and launch
+# Calamares via sudo so the installer opens immediately without a lock.
+if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
+  if command -v xhost >/dev/null 2>&1; then
+    xhost +si:localuser:root >/dev/null 2>&1 || true
+  fi
+  _FSTAB_MOVED=0
+  if [ -e /etc/fstab ] && [ ! -e /etc/fstab.orig.calamares ]; then
+    if sudo -n mv /etc/fstab /etc/fstab.orig.calamares 2>/dev/null; then
+      _FSTAB_MOVED=1
+    fi
+  fi
+  restore_live_env() {
+    if [ "$_FSTAB_MOVED" = "1" ] && [ -e /etc/fstab.orig.calamares ] && [ ! -e /etc/fstab ]; then
+      sudo -n mv /etc/fstab.orig.calamares /etc/fstab 2>/dev/null || true
+    fi
+    if command -v xhost >/dev/null 2>&1; then
+      xhost -si:localuser:root >/dev/null 2>&1 || true
+    fi
+  }
+  trap restore_live_env EXIT INT TERM
+  _CAL_RC=0
+  sudo -n env \
+    DISPLAY="${DISPLAY:-:0}" \
+    XAUTHORITY="${XAUTHORITY:-$HOME/.Xauthority}" \
+    LANG="${LANG:-en_US.UTF-8}" \
+    QT_AUTO_SCREEN_SCALE_FACTOR=1 \
+    calamares "$@" || _CAL_RC=$?
+  trap - EXIT INT TERM
+  restore_live_env
+  exit "$_CAL_RC"
+fi
+
+for _WRAPPER in /usr/bin/install-debian /usr/bin/calamares-install-debian; do
+  if [ -x "$_WRAPPER" ]; then
+    exec "$_WRAPPER" "$@"
+  fi
+done
+exec pkexec calamares "$@"
 EOF
 chmod +x "$BIN_INC/install-linuxium"
 
@@ -1901,8 +1970,620 @@ function main(metadata, orientation, panelHeight, instanceId) {
 }
 EOF
 
+# 5l. Desktop Clock & System Stats widgets (Cinnamon desklets: clock@linuxium
+#     and stats@linuxium), styled to match CBlack and enabled by default in
+#     dconf (section 6). Both auto-align cleanly to the top-right edge of the
+#     primary monitor on any screen resolution until dragged by the user.
+CLOCK_DESKLET_DIR="config/includes.chroot/usr/share/cinnamon/desklets/clock@linuxium"
+mkdir -p "$CLOCK_DESKLET_DIR"
+
+cat > "$CLOCK_DESKLET_DIR/metadata.json" <<'EOF'
+{
+  "uuid": "clock@linuxium",
+  "name": "Linuxium Clock",
+  "description": "Clean CBlack desktop clock and date widget",
+  "icon": "preferences-system-time",
+  "prevent-decorations": true,
+  "max-instances": "10"
+}
+EOF
+
+cat > "$CLOCK_DESKLET_DIR/stylesheet.css" <<'EOF'
+.linuxium-clock-card {
+    width: 248px;
+    padding: 16px 20px;
+    background-color: rgba(14, 14, 18, 0.84);
+    border: 1px solid rgba(255, 255, 255, 0.09);
+    border-radius: 14px;
+}
+
+.linuxium-clock-time-row {
+    spacing: 8px;
+}
+
+.linuxium-clock-time {
+    color: #f5f5f7;
+    font-size: 28pt;
+    font-weight: 700;
+}
+
+.linuxium-clock-sec {
+    color: #8b5cf6;
+    font-size: 11pt;
+    font-weight: 700;
+    padding-bottom: 5px;
+}
+
+.linuxium-clock-date {
+    color: #a1a1aa;
+    font-size: 10pt;
+    font-weight: 500;
+    padding-top: 4px;
+}
+EOF
+
+cat > "$CLOCK_DESKLET_DIR/desklet.js" <<'EOF'
+const Clutter = imports.gi.Clutter;
+const Gio = imports.gi.Gio;
+const GLib = imports.gi.GLib;
+const St = imports.gi.St;
+const Mainloop = imports.mainloop;
+const Desklet = imports.ui.desklet;
+const Main = imports.ui.main;
+const Gettext = imports.gettext;
+
+const UUID = "clock@linuxium";
+const DEFAULT_SENTINEL_X = "740";
+const DEFAULT_OFFSET_Y = 32;
+const RIGHT_MARGIN_X = 284;
+
+function _(str) {
+    let translated = Gettext.dgettext(UUID, str);
+    if (translated !== str) {
+        return translated;
+    }
+    return Gettext.gettext(str);
+}
+
+class LinuxiumClockDesklet extends Desklet.Desklet {
+    constructor(metadata, deskletId) {
+        super(metadata, deskletId);
+        this.setHeader(_("Clock"));
+
+        this._timeoutId = 0;
+        this._monitorsChangedId = 0;
+        this._clockSettingId = 0;
+        this._ifaceSettings = null;
+
+        let card = new St.BoxLayout({
+            vertical: true,
+            style_class: "linuxium-clock-card"
+        });
+        let timeRow = new St.BoxLayout({
+            vertical: false,
+            style_class: "linuxium-clock-time-row",
+            y_align: Clutter.ActorAlign.END
+        });
+        this._timeLabel = new St.Label({
+            style_class: "linuxium-clock-time",
+            text: "--:--",
+            y_align: Clutter.ActorAlign.END
+        });
+        this._secLabel = new St.Label({
+            style_class: "linuxium-clock-sec",
+            text: ":00",
+            y_align: Clutter.ActorAlign.END
+        });
+        timeRow.add_child(this._timeLabel);
+        timeRow.add_child(this._secLabel);
+
+        this._dateLabel = new St.Label({
+            style_class: "linuxium-clock-date",
+            text: ""
+        });
+
+        card.add_child(timeRow);
+        card.add_child(this._dateLabel);
+        this.setContent(card);
+
+        try {
+            this._ifaceSettings = new Gio.Settings({ schema_id: "org.cinnamon.desktop.interface" });
+            this._clockSettingId = this._ifaceSettings.connect("changed::clock-use-24h", () => {
+                this._updateClock();
+            });
+        } catch (e) {
+            this._ifaceSettings = null;
+        }
+
+        this._menu.addSettingsAction(_("Date and Time Settings"), "calendar");
+    }
+
+    _use24h() {
+        if (this._ifaceSettings) {
+            try {
+                return this._ifaceSettings.get_boolean("clock-use-24h");
+            } catch (e) {
+                return true;
+            }
+        }
+        return true;
+    }
+
+    _syncPositionToMonitor() {
+        let mon = Main.layoutManager && Main.layoutManager.primaryMonitor;
+        if (!mon) return;
+
+        let isDefaultPos = false;
+        try {
+            let list = global.settings.get_strv("enabled-desklets");
+            let prefix = UUID + ":" + this.instance_id + ":";
+            for (let i = 0; i < list.length; i++) {
+                if (list[i].indexOf(prefix) === 0) {
+                    let parts = list[i].split(":");
+                    if (parts.length === 4 && parts[2] === DEFAULT_SENTINEL_X) {
+                        isDefaultPos = true;
+                    }
+                    break;
+                }
+            }
+        } catch (e) {
+            isDefaultPos = false;
+        }
+
+        if (isDefaultPos) {
+            let targetX = Math.max(mon.x + 24, mon.x + mon.width - RIGHT_MARGIN_X);
+            let targetY = mon.y + DEFAULT_OFFSET_Y;
+            this.actor.set_position(targetX, targetY);
+        }
+    }
+
+    _updateClock() {
+        let now = GLib.DateTime.new_now_local();
+        if (!now) return true;
+
+        if (this._use24h()) {
+            this._timeLabel.set_text(now.format("%H:%M") || "");
+            this._secLabel.set_text(now.format(":%S") || "");
+        } else {
+            this._timeLabel.set_text((now.format("%I:%M") || "").replace(/^0/, ""));
+            this._secLabel.set_text(now.format("%p") || "");
+        }
+        let dateStr = (now.format("%A, %B %e") || "").replace(/\s+/g, " ").trim();
+        this._dateLabel.set_text(dateStr);
+        return true;
+    }
+
+    on_desklet_added_to_desktop() {
+        this._updateClock();
+        this._syncPositionToMonitor();
+        if (this._timeoutId === 0) {
+            this._timeoutId = Mainloop.timeout_add_seconds(1, () => this._updateClock());
+        }
+        if (this._monitorsChangedId === 0 && Main.layoutManager) {
+            this._monitorsChangedId = Main.layoutManager.connect("monitors-changed", () => {
+                this._syncPositionToMonitor();
+            });
+        }
+    }
+
+    on_desklet_removed() {
+        if (this._timeoutId > 0) {
+            Mainloop.source_remove(this._timeoutId);
+            this._timeoutId = 0;
+        }
+        if (this._monitorsChangedId > 0 && Main.layoutManager) {
+            Main.layoutManager.disconnect(this._monitorsChangedId);
+            this._monitorsChangedId = 0;
+        }
+        if (this._clockSettingId > 0 && this._ifaceSettings) {
+            this._ifaceSettings.disconnect(this._clockSettingId);
+            this._clockSettingId = 0;
+        }
+    }
+}
+
+function main(metadata, deskletId) {
+    return new LinuxiumClockDesklet(metadata, deskletId);
+}
+EOF
+
+STATS_DESKLET_DIR="config/includes.chroot/usr/share/cinnamon/desklets/stats@linuxium"
+mkdir -p "$STATS_DESKLET_DIR"
+
+cat > "$STATS_DESKLET_DIR/metadata.json" <<'EOF'
+{
+  "uuid": "stats@linuxium",
+  "name": "Linuxium System Stats",
+  "description": "Live CPU, memory, disk and uptime desktop widget",
+  "icon": "utilities-system-monitor",
+  "prevent-decorations": true,
+  "max-instances": "10"
+}
+EOF
+
+cat > "$STATS_DESKLET_DIR/stylesheet.css" <<'EOF'
+.linuxium-stats-card {
+    width: 248px;
+    padding: 16px 20px;
+    background-color: rgba(14, 14, 18, 0.84);
+    border: 1px solid rgba(255, 255, 255, 0.09);
+    border-radius: 14px;
+    spacing: 10px;
+}
+
+.linuxium-stats-header-row {
+    padding-bottom: 2px;
+}
+
+.linuxium-stats-title {
+    color: #e4e4e7;
+    font-size: 8.5pt;
+    font-weight: 700;
+}
+
+.linuxium-stats-uptime {
+    color: #8b5cf6;
+    font-size: 8.5pt;
+    font-weight: 600;
+}
+
+.linuxium-stat-group {
+    spacing: 4px;
+}
+
+.linuxium-stat-label {
+    color: #d4d4d8;
+    font-size: 9pt;
+    font-weight: 600;
+}
+
+.linuxium-stat-value {
+    color: #a1a1aa;
+    font-size: 8.5pt;
+    font-weight: 500;
+}
+
+.linuxium-stat-track {
+    background-color: rgba(255, 255, 255, 0.09);
+    border-radius: 3px;
+    height: 6px;
+    width: 208px;
+}
+
+.linuxium-stat-fill {
+    background-color: #8b5cf6;
+    border-radius: 3px;
+    height: 6px;
+}
+
+.linuxium-stat-fill-warn {
+    background-color: #f59e0b;
+    border-radius: 3px;
+    height: 6px;
+}
+
+.linuxium-stat-fill-crit {
+    background-color: #ef4444;
+    border-radius: 3px;
+    height: 6px;
+}
+EOF
+
+cat > "$STATS_DESKLET_DIR/desklet.js" <<'EOF'
+const ByteArray = imports.byteArray;
+const Clutter = imports.gi.Clutter;
+const Gio = imports.gi.Gio;
+const GLib = imports.gi.GLib;
+const St = imports.gi.St;
+const Mainloop = imports.mainloop;
+const Desklet = imports.ui.desklet;
+const Main = imports.ui.main;
+const Util = imports.misc.util;
+const Gettext = imports.gettext;
+
+const UUID = "stats@linuxium";
+const DEFAULT_SENTINEL_X = "740";
+const DEFAULT_OFFSET_Y = 168;
+const RIGHT_MARGIN_X = 284;
+const BAR_WIDTH_PX = 208;
+
+function _(str) {
+    let translated = Gettext.dgettext(UUID, str);
+    if (translated !== str) {
+        return translated;
+    }
+    return Gettext.gettext(str);
+}
+
+function readTextFile(path) {
+    try {
+        let [ok, bytes] = GLib.file_get_contents(path);
+        if (!ok || !bytes) return "";
+        if (typeof bytes === "string") return bytes;
+        return ByteArray.toString(bytes);
+    } catch (e) {
+        return "";
+    }
+}
+
+class LinuxiumStatsDesklet extends Desklet.Desklet {
+    constructor(metadata, deskletId) {
+        super(metadata, deskletId);
+        this.setHeader(_("System Stats"));
+
+        this._timeoutId = 0;
+        this._warmupId = 0;
+        this._monitorsChangedId = 0;
+        this._prevCpuTotal = 0;
+        this._prevCpuIdle = 0;
+
+        let card = new St.BoxLayout({
+            vertical: true,
+            style_class: "linuxium-stats-card"
+        });
+
+        let headerRow = new St.BoxLayout({
+            vertical: false,
+            style_class: "linuxium-stats-header-row",
+            x_expand: true
+        });
+        let titleLabel = new St.Label({
+            style_class: "linuxium-stats-title",
+            text: _("SYSTEM STATS"),
+            x_expand: true,
+            x_align: Clutter.ActorAlign.START
+        });
+        this._uptimeLabel = new St.Label({
+            style_class: "linuxium-stats-uptime",
+            text: "",
+            x_align: Clutter.ActorAlign.END
+        });
+        headerRow.add_child(titleLabel);
+        headerRow.add_child(this._uptimeLabel);
+        card.add_child(headerRow);
+
+        this._cpuMetric = this._createMetricRow(_("CPU"));
+        this._ramMetric = this._createMetricRow(_("RAM"));
+        this._diskMetric = this._createMetricRow(_("Disk"));
+
+        card.add_child(this._cpuMetric.box);
+        card.add_child(this._ramMetric.box);
+        card.add_child(this._diskMetric.box);
+
+        this.setContent(card);
+
+        this._menu.addAction(_("Open System Monitor"), () => {
+            Util.spawn(["gnome-system-monitor"]);
+        });
+    }
+
+    _createMetricRow(labelText) {
+        let group = new St.BoxLayout({
+            vertical: true,
+            style_class: "linuxium-stat-group"
+        });
+        let topRow = new St.BoxLayout({
+            vertical: false,
+            x_expand: true
+        });
+        let label = new St.Label({
+            style_class: "linuxium-stat-label",
+            text: labelText,
+            x_expand: true,
+            x_align: Clutter.ActorAlign.START
+        });
+        let value = new St.Label({
+            style_class: "linuxium-stat-value",
+            text: "0%",
+            x_align: Clutter.ActorAlign.END
+        });
+        topRow.add_child(label);
+        topRow.add_child(value);
+
+        let track = new St.BoxLayout({
+            vertical: false,
+            style_class: "linuxium-stat-track"
+        });
+        let fill = new St.Bin({
+            style_class: "linuxium-stat-fill",
+            style: "width: 4px; height: 6px;"
+        });
+        track.add_child(fill);
+
+        group.add_child(topRow);
+        group.add_child(track);
+        return { box: group, value: value, fill: fill };
+    }
+
+    _applyBar(metric, pct, text) {
+        let clamped = Math.max(0, Math.min(100, Math.round(pct)));
+        let px = Math.max(4, Math.round((BAR_WIDTH_PX * clamped) / 100));
+        metric.value.set_text(text);
+        metric.fill.style_class = clamped >= 90
+            ? "linuxium-stat-fill-crit"
+            : (clamped >= 75 ? "linuxium-stat-fill-warn" : "linuxium-stat-fill");
+        metric.fill.style = "width: " + px + "px; height: 6px;";
+    }
+
+    _sampleCpuPercent() {
+        let stat = readTextFile("/proc/stat");
+        if (!stat) return 0;
+        let firstLine = stat.split("\n")[0] || "";
+        let parts = firstLine.trim().split(/\s+/);
+        if (parts[0] !== "cpu" || parts.length < 5) return 0;
+
+        let total = 0;
+        for (let i = 1; i < parts.length; i++) {
+            let v = parseInt(parts[i], 10);
+            if (Number.isFinite(v)) total += v;
+        }
+        let idle = (parseInt(parts[4], 10) || 0) + (parseInt(parts[5], 10) || 0);
+
+        let pct = 0;
+        if (this._prevCpuTotal > 0 && total > this._prevCpuTotal) {
+            let dTotal = total - this._prevCpuTotal;
+            let dIdle = idle - this._prevCpuIdle;
+            pct = ((dTotal - dIdle) / dTotal) * 100;
+        } else if (total > 0) {
+            pct = ((total - idle) / total) * 100;
+        }
+        this._prevCpuTotal = total;
+        this._prevCpuIdle = idle;
+        return Math.max(0, Math.min(100, pct));
+    }
+
+    _sampleRam() {
+        let info = readTextFile("/proc/meminfo");
+        if (!info) return { pct: 0, text: "0%" };
+        let totalKiB = 0;
+        let availKiB = 0;
+        let freeKiB = 0;
+        let buffersKiB = 0;
+        let cachedKiB = 0;
+
+        let lines = info.split("\n");
+        for (let i = 0; i < lines.length; i++) {
+            let m = lines[i].match(/^([A-Za-z_]+):\s+(\d+)/);
+            if (!m) continue;
+            let k = m[1];
+            let v = parseInt(m[2], 10);
+            if (k === "MemTotal") totalKiB = v;
+            else if (k === "MemAvailable") availKiB = v;
+            else if (k === "MemFree") freeKiB = v;
+            else if (k === "Buffers") buffersKiB = v;
+            else if (k === "Cached") cachedKiB = v;
+        }
+        if (totalKiB <= 0) return { pct: 0, text: "0%" };
+        if (availKiB <= 0) availKiB = freeKiB + buffersKiB + cachedKiB;
+
+        let usedKiB = Math.max(0, totalKiB - availKiB);
+        let pct = (usedKiB / totalKiB) * 100;
+        let usedGiB = (usedKiB / 1048576).toFixed(1);
+        let totalGiB = (totalKiB / 1048576).toFixed(1);
+        return {
+            pct: pct,
+            text: usedGiB + " / " + totalGiB + "G (" + Math.round(pct) + "%)"
+        };
+    }
+
+    _sampleDisk() {
+        try {
+            let root = Gio.File.new_for_path("/");
+            let fs = root.query_filesystem_info("filesystem::size,filesystem::free", null);
+            let total = fs.get_attribute_uint64("filesystem::size");
+            let free = fs.get_attribute_uint64("filesystem::free");
+            if (total <= 0) return { pct: 0, text: "0%" };
+            let used = Math.max(0, total - free);
+            let pct = (used / total) * 100;
+            let usedGB = (used / 1073741824).toFixed(1);
+            let totalGB = (total / 1073741824).toFixed(0);
+            return {
+                pct: pct,
+                text: usedGB + " / " + totalGB + "G (" + Math.round(pct) + "%)"
+            };
+        } catch (e) {
+            return { pct: 0, text: "N/A" };
+        }
+    }
+
+    _sampleUptime() {
+        let up = readTextFile("/proc/uptime");
+        if (!up) return "";
+        let secs = Math.floor(parseFloat(up.trim().split(/\s+/)[0]) || 0);
+        let days = Math.floor(secs / 86400);
+        let hours = Math.floor((secs % 86400) / 3600);
+        let mins = Math.floor((secs % 3600) / 60);
+        if (days > 0) return "up " + days + "d " + hours + "h";
+        if (hours > 0) return "up " + hours + "h " + mins + "m";
+        return "up " + mins + "m";
+    }
+
+    _syncPositionToMonitor() {
+        let mon = Main.layoutManager && Main.layoutManager.primaryMonitor;
+        if (!mon) return;
+
+        let isDefaultPos = false;
+        try {
+            let list = global.settings.get_strv("enabled-desklets");
+            let prefix = UUID + ":" + this.instance_id + ":";
+            for (let i = 0; i < list.length; i++) {
+                if (list[i].indexOf(prefix) === 0) {
+                    let parts = list[i].split(":");
+                    if (parts.length === 4 && parts[2] === DEFAULT_SENTINEL_X) {
+                        isDefaultPos = true;
+                    }
+                    break;
+                }
+            }
+        } catch (e) {
+            isDefaultPos = false;
+        }
+
+        if (isDefaultPos) {
+            let targetX = Math.max(mon.x + 24, mon.x + mon.width - RIGHT_MARGIN_X);
+            let targetY = mon.y + DEFAULT_OFFSET_Y;
+            this.actor.set_position(targetX, targetY);
+        }
+    }
+
+    _refreshStats() {
+        let cpuPct = this._sampleCpuPercent();
+        this._applyBar(this._cpuMetric, cpuPct, Math.round(cpuPct) + "%");
+
+        let ram = this._sampleRam();
+        this._applyBar(this._ramMetric, ram.pct, ram.text);
+
+        let disk = this._sampleDisk();
+        this._applyBar(this._diskMetric, disk.pct, disk.text);
+
+        this._uptimeLabel.set_text(this._sampleUptime());
+        return true;
+    }
+
+    on_desklet_added_to_desktop() {
+        this._refreshStats();
+        this._syncPositionToMonitor();
+        if (this._warmupId === 0) {
+            this._warmupId = Mainloop.timeout_add(600, () => {
+                this._warmupId = 0;
+                this._refreshStats();
+                return false;
+            });
+        }
+        if (this._timeoutId === 0) {
+            this._timeoutId = Mainloop.timeout_add_seconds(2, () => this._refreshStats());
+        }
+        if (this._monitorsChangedId === 0 && Main.layoutManager) {
+            this._monitorsChangedId = Main.layoutManager.connect("monitors-changed", () => {
+                this._syncPositionToMonitor();
+            });
+        }
+    }
+
+    on_desklet_removed() {
+        if (this._warmupId > 0) {
+            Mainloop.source_remove(this._warmupId);
+            this._warmupId = 0;
+        }
+        if (this._timeoutId > 0) {
+            Mainloop.source_remove(this._timeoutId);
+            this._timeoutId = 0;
+        }
+        if (this._monitorsChangedId > 0 && Main.layoutManager) {
+            Main.layoutManager.disconnect(this._monitorsChangedId);
+            this._monitorsChangedId = 0;
+        }
+    }
+}
+
+function main(metadata, deskletId) {
+    return new LinuxiumStatsDesklet(metadata, deskletId);
+}
+EOF
+
 # 6. Default settings: Cinnamon wallpaper, CBlack + Papirus-Dark themes,
-#    Lynx taskbar menu icon, Taskbar Search Bar applet, and desktop icons
+#    Lynx taskbar menu icon, Taskbar Search Bar applet, Clock & System Stats
+#    desktop widgets, and desktop icons
 mkdir -p config/includes.chroot/etc/dconf/profile
 mkdir -p config/includes.chroot/etc/dconf/db/local.d
 
@@ -1951,12 +2632,14 @@ name='CBlack'
 [org/cinnamon/desktop/wm/preferences]
 theme='CBlack'
 
-# Taskbar layout: Lynx menu icon on the far left, followed immediately by
-# the Linuxium Search Bar applet, separator, and grouped window list.
+# Taskbar layout & desktop widgets: Lynx menu icon on the far left,
+# followed immediately by the Linuxium Search Bar applet, separator, and
+# grouped window list; Clock + System Stats desklets enabled on the desktop.
 [org/cinnamon]
 app-menu-icon-name='linuxium'
 app-menu-label=''
 enabled-applets=['panel1:left:0:menu@cinnamon.org', 'panel1:left:1:search-bar@linuxium', 'panel1:left:2:separator@cinnamon.org', 'panel1:left:3:grouped-window-list@cinnamon.org', 'panel1:right:0:systray@cinnamon.org', 'panel1:right:1:xapp-status@cinnamon.org', 'panel1:right:2:notifications@cinnamon.org', 'panel1:right:3:printers@cinnamon.org', 'panel1:right:4:removable-drives@cinnamon.org', 'panel1:right:5:keyboard@cinnamon.org', 'panel1:right:6:favorites@cinnamon.org', 'panel1:right:7:network@cinnamon.org', 'panel1:right:8:sound@cinnamon.org', 'panel1:right:9:power@cinnamon.org', 'panel1:right:10:calendar@cinnamon.org', 'panel1:right:11:cornerbar@cinnamon.org']
+enabled-desklets=['clock@linuxium:0:740:32', 'stats@linuxium:1:740:168']
 favorite-apps=['firefox-esr.desktop', 'nemo.desktop', 'gimp.desktop', 'org.gnome.Terminal.desktop', 'cinnamon-settings.desktop', 'libreoffice-writer.desktop', 'vlc.desktop']
 EOF
 
@@ -2742,13 +3425,35 @@ DCONFEOF
 		dconf update 2>/dev/null || true
 	fi
 
-	# Populate the live user's Desktop with trusted launchers for Install
-	# Linuxium, the File Browser (Nemo) and Firefox. Nemo marks ~/Desktop
-	# launchers trusted when their executable bit (0755) is set, avoiding
-	# any "Untrusted application launcher" prompt on first click. Placing
-	# install-linuxium.desktop here (rather than in /etc/skel/Desktop)
-	# keeps the installer shortcut on the live desktop without leaving a
-	# dead installer icon behind on installed systems.
+	# Unlock administrative actions (Calamares installer via pkexec,
+	# GParted, Synaptic, GDebi, Disks, drive mounting) in the LIVE session
+	# only. Bookworm's live-config + polkitd 122 otherwise prompts for the
+	# hidden live password ("live") when starting Calamares (Debian bug
+	# #1037295). Installed systems never run live-config and keep standard
+	# Polkit authentication.
+	for _PK_DIR in /etc/polkit-1/rules.d /usr/share/polkit-1/rules.d
+	do
+		[ -d "${_PK_DIR}" ] || mkdir -p "${_PK_DIR}"
+		cat > "${_PK_DIR}/49-linuxium-live.rules" <<POLKITEOF
+// Live session only: allow the live user / sudo group to run administrative
+// tools (Calamares installer, partition tools, package managers) without a
+// Polkit password lock.
+polkit.addRule(function(action, subject) {
+	if (subject.local && subject.active &&
+	    (subject.user === "${LINUXIUM_LIVE_USER}" || subject.isInGroup("sudo"))) {
+		return polkit.Result.YES;
+	}
+});
+POLKITEOF
+		chmod 0644 "${_PK_DIR}/49-linuxium-live.rules" 2>/dev/null || true
+	done
+
+	# Populate the live user's Desktop with unlocked, trusted launchers for
+	# Install Linuxium, the File Browser (Nemo) and Firefox. Nemo shows a
+	# padlock emblem (emblem-readonly) if a ~/Desktop file is not writable
+	# by the logged-in user and requires the executable bit (0755) to treat
+	# launchers as trusted. Resolve numeric UID:GID explicitly so ownership
+	# always matches the live user cleanly.
 	if [ -n "${LINUXIUM_LIVE_USER}" ]
 	then
 		_LIVE_HOME="$(getent passwd "${LINUXIUM_LIVE_USER}" 2>/dev/null | cut -d: -f6 || true)"
@@ -2759,6 +3464,7 @@ DCONFEOF
 		if [ -n "${_LIVE_HOME}" ] && [ -d "${_LIVE_HOME}" ]
 		then
 			mkdir -p "${_LIVE_HOME}/Desktop"
+			chmod 0755 "${_LIVE_HOME}/Desktop" 2>/dev/null || true
 			for _DESK_APP in install-linuxium.desktop nemo.desktop firefox-esr.desktop
 			do
 				if [ -f "/usr/share/applications/${_DESK_APP}" ]
@@ -2767,7 +3473,14 @@ DCONFEOF
 					chmod 0755 "${_LIVE_HOME}/Desktop/${_DESK_APP}"
 				fi
 			done
-			chown -R "${LINUXIUM_LIVE_USER}:${LINUXIUM_LIVE_USER}" "${_LIVE_HOME}/Desktop" 2>/dev/null || true
+			_LIVE_UID="$(id -u "${LINUXIUM_LIVE_USER}" 2>/dev/null || true)"
+			_LIVE_GID="$(id -g "${LINUXIUM_LIVE_USER}" 2>/dev/null || true)"
+			if [ -n "${_LIVE_UID}" ] && [ -n "${_LIVE_GID}" ]
+			then
+				chown -R "${_LIVE_UID}:${_LIVE_GID}" "${_LIVE_HOME}/Desktop" 2>/dev/null || true
+			else
+				chown -R "${LINUXIUM_LIVE_USER}:${LINUXIUM_LIVE_USER}" "${_LIVE_HOME}/Desktop" 2>/dev/null || true
+			fi
 		fi
 	fi
 
@@ -2852,17 +3565,22 @@ fi
 plymouth-set-default-theme linuxium
 update-initramfs -u -k all
 
-# Neofetch: show the Linuxium logo for every new user. Bookworm's
-# Neofetch needs ImageMagick present even for the chafa backend, and a
-# graphical terminal whose pixel size it can detect (xdotool/x11-utils
-# are in the package list for exactly this); on a bare Linux VT it has
-# no pixel dimensions and falls back to ASCII art by design.
+# Neofetch: show the Linuxium logo with a transparent background for
+# every new user. Bookworm's Neofetch needs ImageMagick present even for
+# the chafa backend, and a graphical terminal whose pixel size it can
+# detect (xdotool/x11-utils are in the package list for exactly this).
+# crop_mode="none" passes our pre-sized PNG32 RGBA logo straight to chafa
+# untouched so its alpha transparency is preserved 100%.
 mkdir -p /etc/skel/.config/neofetch
 if neofetch --print_config > /tmp/nf.conf 2>/dev/null && [ -s /tmp/nf.conf ]; then
-  sed -i 's|^image_backend=.*|image_backend="chafa"|; s|^image_source=.*|image_source="/usr/share/linuxium/logo.png"|' /tmp/nf.conf
+  sed -i \
+    -e 's|^image_backend=.*|image_backend="chafa"|' \
+    -e 's|^image_source=.*|image_source="/usr/share/linuxium/logo.png"|' \
+    -e 's|^crop_mode=.*|crop_mode="none"|' \
+    /tmp/nf.conf
   mv /tmp/nf.conf /etc/skel/.config/neofetch/config.conf
 else
-  printf 'image_backend="chafa"\nimage_source="/usr/share/linuxium/logo.png"\n' > /etc/skel/.config/neofetch/config.conf
+  printf 'image_backend="chafa"\nimage_source="/usr/share/linuxium/logo.png"\ncrop_mode="none"\n' > /etc/skel/.config/neofetch/config.conf
 fi
 # The config is sourced top-to-bottom; append the decisive values so a
 # future Neofetch default-config format change cannot silently undo them.
@@ -2871,6 +3589,7 @@ cat >> /etc/skel/.config/neofetch/config.conf <<'NF'
 # Linuxium overrides (valid CLI test: neofetch --chafa /usr/share/linuxium/logo.png)
 image_backend="chafa"
 image_source="/usr/share/linuxium/logo.png"
+crop_mode="none"
 NF
 
 # ---- Calamares: keep Debian's tested module sequence/helpers, rebrand ----
@@ -3165,6 +3884,12 @@ if [ -f binary/live/filesystem.squashfs ]; then
     "/usr/share/cinnamon/applets/search-bar@linuxium/applet.js" \
     "/usr/share/cinnamon/applets/search-bar@linuxium/metadata.json" \
     "/usr/share/cinnamon/applets/search-bar@linuxium/stylesheet.css" \
+    "/usr/share/cinnamon/desklets/clock@linuxium/desklet.js" \
+    "/usr/share/cinnamon/desklets/clock@linuxium/metadata.json" \
+    "/usr/share/cinnamon/desklets/clock@linuxium/stylesheet.css" \
+    "/usr/share/cinnamon/desklets/stats@linuxium/desklet.js" \
+    "/usr/share/cinnamon/desklets/stats@linuxium/metadata.json" \
+    "/usr/share/cinnamon/desklets/stats@linuxium/stylesheet.css" \
     "/usr/share/gnome-background-properties/linuxium.xml" \
     "/usr/share/cinnamon-background-properties/linuxium.xml" \
     "/etc/skel/Desktop/nemo.desktop" \
