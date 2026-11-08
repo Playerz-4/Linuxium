@@ -909,149 +909,99 @@ Presentation
 }
 QMLEOF
 
-# 5h. "Welcome to Linuxium" app (shown once per live session) + launchers
+# 5h. Live-only startup welcome popup + "Install Linuxium" desktop launcher
+# NOTE: The intro is strictly a one-time live-session popup dialog (not an
+# openable application in the menu, taskbar, search bar, or $PATH).
 BIN_INC="config/includes.chroot/usr/bin"
+LIB_LINUXIUM="config/includes.chroot/usr/lib/linuxium"
 APP_INC="config/includes.chroot/usr/share/applications"
 AUTO_INC="config/includes.chroot/etc/xdg/autostart"
 DOC_LINUXIUM="config/includes.chroot/usr/share/doc/linuxium"
-mkdir -p "$BIN_INC" "$APP_INC" "$AUTO_INC" "$DOC_LINUXIUM"
+mkdir -p "$BIN_INC" "$LIB_LINUXIUM" "$APP_INC" "$AUTO_INC" "$DOC_LINUXIUM"
 
-cat > "$BIN_INC/linuxium-welcome" <<'PYEOF'
+cat > "$LIB_LINUXIUM/welcome-popup" <<'PYEOF'
 #!/usr/bin/env python3
-"""Linuxium Welcome - first-run window for the live session (GTK 3)."""
+"""Linuxium Welcome - live-session startup popup dialog (GTK 3)."""
 import subprocess
 import sys
 from pathlib import Path
 
 import gi
 
+gi.require_version("Gdk", "3.0")
 gi.require_version("Gtk", "3.0")
 gi.require_version("GdkPixbuf", "2.0")
-from gi.repository import GdkPixbuf, Gtk  # noqa: E402
+from gi.repository import Gdk, GdkPixbuf, Gtk  # noqa: E402
 
 LOGO = "/usr/share/pixmaps/linuxium.png"
 DISABLE_FILE = Path.home() / ".config" / "linuxium" / "no-welcome"
 
 
-def launch(parent, argv, what):
-    try:
-        subprocess.Popen(
-            argv,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True,
-        )
-    except (FileNotFoundError, OSError) as exc:
-        dialog = Gtk.MessageDialog(
-            transient_for=parent,
-            modal=True,
-            message_type=Gtk.MessageType.WARNING,
-            buttons=Gtk.ButtonsType.OK,
-            text="Could not start %s" % what,
-        )
-        dialog.format_secondary_text(str(exc))
-        dialog.run()
-        dialog.destroy()
-
-
-class Welcome(Gtk.Window):
+class WelcomePopup(Gtk.Window):
     def __init__(self):
         Gtk.Window.__init__(self, title="Welcome to Linuxium")
-        self.set_default_size(780, 580)
-        self.set_border_width(18)
+        self.set_default_size(460, -1)
+        self.set_resizable(False)
+        self.set_border_width(20)
+        self.set_position(Gtk.WindowPosition.CENTER)
+        self.set_type_hint(Gdk.WindowTypeHint.DIALOG)
+        self.set_skip_taskbar_hint(True)
+        self.set_skip_pager_hint(True)
+        self.set_keep_above(True)
         self.connect("destroy", Gtk.main_quit)
 
         outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
         self.add(outer)
 
-        # Header: logo + titles
-        header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=16)
+        header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=14)
         try:
-            pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_scale(LOGO, 96, 96, True)
+            pixbuf = GdkPixbuf.Pixbuf.new_from_file_at_scale(LOGO, 64, 64, True)
             header.pack_start(Gtk.Image.new_from_pixbuf(pixbuf), False, False, 0)
         except Exception:
             pass
+
         titles = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        titles.set_valign(Gtk.Align.CENTER)
         title = Gtk.Label()
         title.set_markup(
-            '<span size="xx-large" weight="bold">Welcome to Linuxium :)</span>'
+            '<span size="x-large" weight="bold">Welcome to Linuxium :)</span>'
         )
         title.set_halign(Gtk.Align.START)
         subtitle = Gtk.Label()
-        subtitle.set_markup('<span size="large">luv from playerz</span>')
+        subtitle.set_markup('<span size="medium">luv from playerz</span>')
         subtitle.set_halign(Gtk.Align.START)
         titles.pack_start(title, False, False, 0)
         titles.pack_start(subtitle, False, False, 0)
         header.pack_start(titles, False, False, 0)
         outer.pack_start(header, False, False, 0)
 
-        # What you can do
         info = Gtk.Label()
         info.set_markup(
-            "<b>Try it first:</b> you are running Linuxium live from the ISO. "
-            "Everything works, but nothing is saved when you reboot "
-            "(unless you set up persistence).\n"
-            "<b>Install it:</b> press <i>Install Linuxium</i> (here or right "
-            "on the desktop) and the Calamares installer will walk you through "
-            "language, keyboard, disk and user setup, step by step.\n"
-            "<b>Explore:</b> Firefox, GIMP, Inkscape, LibreOffice, VLC and "
-            "the file manager are ready on the desktop, in the Lynx menu, or "
-            "via the taskbar Search Bar (<i>Super+S</i>).\n"
-            "<b>Get online:</b> click the network icon in the panel to join "
-            "Wi-Fi.\n"
-            "<b>Make it yours:</b> Settings &gt; Backgrounds has all "
-            "wallpapers organized together in one Linuxium category."
+            "You are running the <b>Linuxium</b> live session — everything works "
+            "right out of the box without touching your hard drive.\n\n"
+            "Ready to install permanently? Click <b>Install Linuxium</b> below or "
+            "use the <b>Install Linuxium</b> shortcut right on your desktop."
         )
         info.set_line_wrap(True)
+        info.set_max_width_chars(54)
         info.set_xalign(0)
         outer.pack_start(info, False, False, 0)
 
-        # Buttons
-        grid = Gtk.Grid(column_spacing=10, row_spacing=10)
-        grid.set_column_homogeneous(True)
-        outer.pack_start(grid, False, False, 6)
-
-        install = Gtk.Button(label="Install Linuxium")
-        install.get_style_context().add_class("suggested-action")
-        install.connect("clicked", self.on_install)
-        grid.attach(install, 0, 0, 1, 1)
-
-        try_it = Gtk.Button(label="Try Linuxium first")
-        try_it.connect("clicked", lambda _b: self.destroy())
-        grid.attach(try_it, 1, 0, 1, 1)
-
-        actions = [
-            ("Open Files", ["nemo", str(Path.home())], 0, 1),
-            ("Browse the web", ["firefox-esr"], 1, 1),
-            ("Change wallpaper", ["cinnamon-settings", "backgrounds"], 0, 2),
-            ("Open Terminal", ["gnome-terminal"], 1, 2),
-            ("System Settings", ["cinnamon-settings"], 0, 3),
-        ]
-        for label, argv, col, row in actions:
-            button = Gtk.Button(label=label)
-            button.connect(
-                "clicked",
-                lambda _b, a=argv, lbl=label: launch(self, a, lbl),
-            )
-            grid.attach(button, col, row, 1, 1)
-
-        about = Gtk.Button(label="About Linuxium")
-        about.connect("clicked", self.on_about)
-        grid.attach(about, 1, 3, 1, 1)
-
-        # Don't-show-again (only persists on a persistent live USB / after
-        # install the welcome app simply never autostarts)
-        toggle = Gtk.CheckButton(label="Don't show this again")
+        bottom = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        toggle = Gtk.CheckButton(label="Don't show again")
         toggle.connect("toggled", self.on_toggle)
-        outer.pack_start(toggle, False, False, 0)
+        bottom.pack_start(toggle, False, False, 0)
 
-        footer = Gtk.Label(
-            label="Tip: if the screen ever stays black in a virtual machine, "
-            "reboot and pick the failsafe entry in the boot menu."
-        )
-        footer.set_line_wrap(True)
-        footer.set_xalign(0)
-        outer.pack_start(footer, False, False, 0)
+        dismiss_btn = Gtk.Button(label="Start Exploring")
+        dismiss_btn.connect("clicked", lambda _b: self.destroy())
+
+        install_btn = Gtk.Button(label="Install Linuxium")
+        install_btn.get_style_context().add_class("suggested-action")
+        install_btn.connect("clicked", self.on_install)
+
+        bottom.pack_end(install_btn, False, False, 0)
+        bottom.pack_end(dismiss_btn, False, False, 0)
+        outer.pack_start(bottom, False, False, 4)
 
     def on_toggle(self, button):
         try:
@@ -1064,49 +1014,23 @@ class Welcome(Gtk.Window):
             pass
 
     def on_install(self, _button):
-        dialog = Gtk.MessageDialog(
-            transient_for=self,
-            modal=True,
-            message_type=Gtk.MessageType.QUESTION,
-            buttons=Gtk.ButtonsType.OK_CANCEL,
-            text="Install Linuxium to a disk?",
-        )
-        dialog.format_secondary_text(
-            "The Calamares installer will guide you through every step and "
-            "show a summary before anything is written. If you choose "
-            "'Erase disk' in the installer, everything on that disk will "
-            "be deleted - make sure you pick the right disk."
-        )
-        answer = dialog.run()
-        dialog.destroy()
-        if answer == Gtk.ResponseType.OK:
-            launch(self, ["install-linuxium"], "the installer")
-            self.destroy()
-
-    def on_about(self, _button):
-        dialog = Gtk.MessageDialog(
-            transient_for=self,
-            modal=True,
-            message_type=Gtk.MessageType.INFO,
-            buttons=Gtk.ButtonsType.OK,
-            text="Linuxium - welcome :)",
-        )
-        dialog.format_secondary_text(
-            "Linuxium is a friendly Debian 12 + Cinnamon live system.\n\n"
-            "Wallpaper photo credits: "
-            "/usr/share/doc/linuxium-wallpapers/CREDITS.txt\n"
-            "Installer: Calamares (Debian settings, Linuxium branding)\n\n"
-            "luv from playerz"
-        )
-        dialog.run()
-        dialog.destroy()
+        try:
+            subprocess.Popen(
+                ["/usr/bin/install-linuxium"],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        except OSError:
+            pass
+        self.destroy()
 
 
 def main():
     if DISABLE_FILE.exists() and "--force" not in sys.argv:
         return 0
-    window = Welcome()
-    window.show_all()
+    popup = WelcomePopup()
+    popup.show_all()
     Gtk.main()
     return 0
 
@@ -1114,11 +1038,12 @@ def main():
 if __name__ == "__main__":
     sys.exit(main())
 PYEOF
-chmod +x "$BIN_INC/linuxium-welcome"
+chmod +x "$LIB_LINUXIUM/welcome-popup"
 
-cat > "$BIN_INC/linuxium-welcome-autostart" <<'EOF'
+cat > "$LIB_LINUXIUM/welcome-autostart" <<'EOF'
 #!/bin/sh
-# Show the Welcome window once per LIVE session only.
+# Show the Welcome popup once per LIVE session only and guarantee the
+# "Install Linuxium" desktop icon is present and trusted.
 # An installed system has neither "boot=live" on its kernel command line
 # nor /run/live/medium, so this quietly does nothing after installation.
 case " $(cat /proc/cmdline 2>/dev/null) " in
@@ -1126,32 +1051,44 @@ case " $(cat /proc/cmdline 2>/dev/null) " in
   *) [ -d /run/live/medium ] || exit 0 ;;
 esac
 
-# Mark desktop shortcuts trusted in GVFS as well so Nemo/GIO never show a
-# lock or untrusted-launcher prompt in the live session.
-if [ -d "$HOME/Desktop" ]; then
-  for _desk_file in "$HOME/Desktop"/*.desktop; do
+_DESKTOP_DIR="$HOME/Desktop"
+if command -v xdg-user-dir >/dev/null 2>&1; then
+  _XDG_DESK="$(xdg-user-dir DESKTOP 2>/dev/null || true)"
+  if [ -n "$_XDG_DESK" ]; then
+    _DESKTOP_DIR="$_XDG_DESK"
+  fi
+fi
+mkdir -p "$_DESKTOP_DIR" 2>/dev/null || true
+if [ -f /usr/share/applications/install-linuxium.desktop ] && [ ! -f "$_DESKTOP_DIR/install-linuxium.desktop" ]; then
+  cp -f /usr/share/applications/install-linuxium.desktop "$_DESKTOP_DIR/install-linuxium.desktop" 2>/dev/null || true
+fi
+
+# Mark desktop shortcuts executable + trusted in GVFS so Nemo/GIO never show
+# a lock emblem or untrusted-launcher prompt in the live session.
+if [ -d "$_DESKTOP_DIR" ]; then
+  for _desk_file in "$_DESKTOP_DIR"/*.desktop; do
     [ -f "$_desk_file" ] || continue
-    chmod +x "$_desk_file" 2>/dev/null || true
+    chmod 0755 "$_desk_file" 2>/dev/null || true
     if command -v gio >/dev/null 2>&1; then
       gio set --type=string "$_desk_file" metadata::trusted true 2>/dev/null || true
     fi
+    touch "$_desk_file" 2>/dev/null || true
   done
 fi
 
 [ -e "$HOME/.config/linuxium/no-welcome" ] && exit 0
+shown="${XDG_RUNTIME_DIR:-/tmp}/linuxium-welcome.shown"
+[ -e "$shown" ] && exit 0
 lock="${XDG_RUNTIME_DIR:-/tmp}/linuxium-welcome.lock"
 mkdir "$lock" 2>/dev/null || exit 0
 trap 'rmdir "$lock" 2>/dev/null || true' EXIT INT TERM
+: > "$shown" 2>/dev/null || true
 # Give the desktop a moment to come up first.
-sleep 3
-# Do NOT exec here: exec replaces this shell, so the EXIT trap above would
-# never run and the lock directory would leak, blocking the welcome window
-# for the rest of the session. Run it as a child and exit with its status
-# so the trap removes the lock when it closes.
-/usr/bin/linuxium-welcome
+sleep 2
+/usr/lib/linuxium/welcome-popup
 exit $?
 EOF
-chmod +x "$BIN_INC/linuxium-welcome-autostart"
+chmod +x "$LIB_LINUXIUM/welcome-autostart"
 
 cat > "$BIN_INC/install-linuxium" <<'EOF'
 #!/bin/sh
@@ -1202,20 +1139,6 @@ exec pkexec calamares "$@"
 EOF
 chmod +x "$BIN_INC/install-linuxium"
 
-cat > "$APP_INC/linuxium-welcome.desktop" <<'EOF'
-[Desktop Entry]
-Type=Application
-Version=1.0
-Name=Linuxium Welcome
-Comment=Welcome to Linuxium :) - try, install and explore
-Exec=linuxium-welcome
-TryExec=linuxium-welcome
-Icon=linuxium
-Terminal=false
-Categories=System;Utility;
-StartupNotify=true
-EOF
-
 cat > "$APP_INC/install-linuxium.desktop" <<'EOF'
 [Desktop Entry]
 Type=Application
@@ -1223,22 +1146,22 @@ Version=1.0
 Name=Install Linuxium
 GenericName=Calamares Installer
 Comment=Install Linuxium to your computer with the Calamares installer
-Exec=install-linuxium
-TryExec=calamares
-Icon=linuxium
+Keywords=calamares;system;install;linuxium;installer;
+Exec=/usr/bin/install-linuxium
+Icon=calamares
 Terminal=false
 Categories=Qt;System;
 StartupWMClass=calamares
 StartupNotify=true
 EOF
+chmod 0755 "$APP_INC/install-linuxium.desktop"
 
 cat > "$AUTO_INC/linuxium-welcome.desktop" <<'EOF'
 [Desktop Entry]
 Type=Application
-Name=Linuxium Welcome
-Comment=Show the Linuxium welcome window in the live session
-Exec=linuxium-welcome-autostart
-Icon=linuxium
+Name=Linuxium Welcome Popup
+Comment=Show the one-time Linuxium welcome popup in the live session
+Exec=/usr/lib/linuxium/welcome-autostart
 Terminal=false
 NoDisplay=true
 OnlyShowIn=Cinnamon;X-Cinnamon;
@@ -1253,8 +1176,8 @@ Welcome to Linuxium :) luv from playerz
 * Live user: **linuxium** (automatic login and passwordless sudo; if a
   text-console or manual screen-lock prompt asks for its password, it is
   **live**)
-* Installer: **Install Linuxium** (Calamares) in the menu / welcome window,
-  or the classic Debian installer from the ISO boot menu.
+* Installer: **Install Linuxium** (Calamares) right on the desktop or in
+  the menu, or the classic Debian installer from the ISO boot menu.
 * Wallpapers: Settings > Backgrounds (credits in
   /usr/share/doc/linuxium-wallpapers/CREDITS.txt)
 
@@ -3629,27 +3552,44 @@ if [ -f /etc/calamares/modules/packages.conf ]; then
 fi
 
 # Keep the same archive areas on the installed system as on the live ISO,
-# so the firmware/contrib packages keep receiving updates.
+# so the firmware/contrib packages keep receiving updates, and strip
+# live-only installer/welcome-popup files from the installed target disk
+# right before Calamares unmounts it.
 if [ -f /usr/sbin/sources-final ]; then
   sed -i 's| main non-free-firmware| main contrib non-free non-free-firmware|g' /usr/sbin/sources-final
+  # shellcheck disable=SC2016 # $CHROOT expands at install time inside sources-final
+  sed -i '/^exit 0/i \
+if [ -n "${CHROOT:-}" ] \&\& [ "$CHROOT" != "/" ] \&\& [ -d "$CHROOT" ]; then\
+  rm -f "$CHROOT/etc/skel/Desktop/install-linuxium.desktop" \\\
+        "$CHROOT/usr/share/applications/install-linuxium.desktop" \\\
+        "$CHROOT/usr/bin/install-linuxium" \\\
+        "$CHROOT/etc/xdg/autostart/linuxium-welcome.desktop"\
+  rm -rf "$CHROOT/usr/lib/linuxium"\
+  for _u_desk in "$CHROOT"/home/*/Desktop/install-linuxium.desktop; do\
+    [ -e "$_u_desk" ] \&\& rm -f "$_u_desk"\
+  done\
+fi' /usr/sbin/sources-final
 fi
 
-# We ship our own "Install Linuxium" launcher + Welcome window, so hide
-# Debian's "Install Debian" menu entry and its desktop-icon autostart.
-if [ -f /usr/share/applications/install-debian.desktop ]; then
-  printf '\nNoDisplay=true\n' >> /usr/share/applications/install-debian.desktop
-fi
+# We ship our own "Install Linuxium" launcher + one-time welcome popup, so
+# hide Debian's unbranded "Install Debian" menu entry and desktop-icon autostart.
+for deb_inst_desktop in \
+  /usr/share/applications/install-debian.desktop \
+  /usr/share/applications/calamares-install-debian.desktop; do
+  if [ -f "$deb_inst_desktop" ]; then
+    printf '\nNoDisplay=true\n' >> "$deb_inst_desktop"
+  fi
+done
 if [ -f /etc/xdg/autostart/calamares-desktop-icon.desktop ]; then
   printf '\nHidden=true\n' >> /etc/xdg/autostart/calamares-desktop-icon.desktop
 fi
 
-# Desktop launchers for every new user (both live and installed systems):
-# File Browser (Nemo) and Firefox, marked executable (0755) so Nemo treats
-# them as trusted launchers immediately. (The live-only "Install Linuxium"
-# desktop icon is added at live boot by 0190-linuxium-graphics so it never
-# lingers on an installed system's desktop.)
+# Desktop launchers baked directly into /etc/skel/Desktop (0755, trusted by
+# Nemo out of the box): Install Linuxium, File Browser (Nemo) and Firefox.
+# Calamares's sources-final step above strips install-linuxium.desktop from
+# the installed target disk so only live boots show the installer shortcut.
 mkdir -p /etc/skel/Desktop
-for skel_app in nemo.desktop firefox-esr.desktop; do
+for skel_app in install-linuxium.desktop nemo.desktop firefox-esr.desktop; do
   if [ -f "/usr/share/applications/$skel_app" ]; then
     cp -f "/usr/share/applications/$skel_app" "/etc/skel/Desktop/$skel_app"
     chmod 0755 "/etc/skel/Desktop/$skel_app"
@@ -3892,6 +3832,9 @@ if [ -f binary/live/filesystem.squashfs ]; then
     "/usr/share/cinnamon/desklets/stats@linuxium/stylesheet.css" \
     "/usr/share/gnome-background-properties/linuxium.xml" \
     "/usr/share/cinnamon-background-properties/linuxium.xml" \
+    "/lib/linuxium/welcome-popup" \
+    "/lib/linuxium/welcome-autostart" \
+    "/etc/skel/Desktop/install-linuxium.desktop" \
     "/etc/skel/Desktop/nemo.desktop" \
     "/etc/skel/Desktop/firefox-esr.desktop" \
     "/usr/share/themes/CBlack/index.theme" \
@@ -3903,6 +3846,10 @@ if [ -f binary/live/filesystem.squashfs ]; then
       exit 1
     fi
   done
+  if grep -Fq "/usr/share/applications/linuxium-welcome.desktop" <<<"$ROOTFS_LISTING"; then
+    echo "ERROR: linuxium-welcome.desktop must not be installed as an openable app" >&2
+    exit 1
+  fi
   echo "Live root filesystem boot-component check: OK"
 else
   echo "ERROR: binary/live/filesystem.squashfs not found after build; cannot verify the live root filesystem" >&2

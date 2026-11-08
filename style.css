@@ -181,7 +181,7 @@ dd{font-weight:500;line-height:1.45}
 }
 .steps-note{max-width:720px;margin-top:14px}
 
-/* call-to-action band */
+/* call-to-action & Discord community band */
 .band{
   display:flex;justify-content:space-between;align-items:center;gap:28px;flex-wrap:wrap;
   margin-top:84px;padding:38px 40px;border-radius:20px;
@@ -189,6 +189,36 @@ dd{font-weight:500;line-height:1.45}
 }
 .band h2{color:#fff}
 .band p{color:#aeb9c1;margin-top:8px;max-width:48ch}
+.community-band{
+  margin-top:0;
+  display:grid;
+  grid-template-columns:minmax(0,1fr) auto;
+  gap:40px;
+  align-items:center;
+}
+.community-copy h2{margin-top:18px}
+.community-copy p{margin-top:12px}
+.community-copy .actions{margin-top:26px}
+.eyebrow-dark{
+  background:var(--dark-2);
+  border-color:rgba(255,255,255,.12);
+  color:#d5dde2;
+  box-shadow:none;
+}
+.discord-embed{
+  display:flex;
+  justify-content:center;
+  border-radius:14px;
+  overflow:hidden;
+  border:1px solid rgba(255,255,255,.10);
+  box-shadow:0 14px 36px rgba(0,0,0,.38);
+  background:#1e1f22;
+}
+.discord-embed iframe{
+  display:block;
+  max-width:100%;
+  border:0;
+}
 
 /* ---------- forum ---------- */
 .page-head{padding:64px 0 42px}
@@ -237,6 +267,8 @@ footer nav a:hover{background:var(--surface-soft);color:var(--ink)}
   .split{grid-template-columns:1fr;gap:32px}
   .boards{grid-template-columns:1fr}
   .band{padding:30px 24px}
+  .community-band{grid-template-columns:1fr;gap:28px}
+  .discord-embed{justify-self:center;max-width:100%}
 }
 @media(max-width:640px){
   .wrap{padding:0 18px}
