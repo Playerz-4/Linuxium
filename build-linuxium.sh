@@ -37,6 +37,16 @@ set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 
 LINUXIUM_VERSION="1.1"
+# Outer .iso.xz compression preset (0..9). Level 6 is xz's sweet spot:
+# within ~1% of -9 ratio while needing ~94 MiB/thread instead of 674 MiB/thread.
+LINUXIUM_XZ_LEVEL="${LINUXIUM_XZ_LEVEL:-6}"
+case "$LINUXIUM_XZ_LEVEL" in
+  [0-9]) ;;
+  *)
+    echo "ERROR: LINUXIUM_XZ_LEVEL must be a single digit 0..9 (got '$LINUXIUM_XZ_LEVEL')" >&2
+    exit 1
+    ;;
+esac
 # Resolve the script's own directory first: the default images, the extra
 # wallpapers folder, the download cache and the build tree all live next
 # to the script, NOT in whatever directory the caller happens to be in.
@@ -105,7 +115,7 @@ cd "$SCRIPT_DIR"
 # also name cpio so the requirement is obvious and guaranteed.
 "${SUDO[@]}" apt-get update
 "${SUDO[@]}" apt-get install -y --install-recommends \
-  live-build debootstrap cpio squashfs-tools xorriso apt-utils \
+  live-build debootstrap cpio squashfs-tools xz-utils xorriso apt-utils \
   isolinux syslinux-common grub-pc-bin grub-efi-amd64-bin mtools dosfstools \
   imagemagick curl ca-certificates librsvg2-bin sbsigntool
 
@@ -149,6 +159,7 @@ lb config \
   --architectures amd64 \
   --archive-areas "main contrib non-free non-free-firmware" \
   --binary-images iso-hybrid \
+  --chroot-squashfs-compression-type xz \
   --bootloaders "syslinux,grub-efi" \
   --uefi-secure-boot enable \
   --debian-installer live \
@@ -159,6 +170,36 @@ lb config \
   --bootappend-live "boot=live components quiet splash loglevel=3 username=linuxium hostname=linuxium locales=en_US.UTF-8 keyboard-layouts=us" \
   --bootappend-live-failsafe "boot=live components nosplash nomodeset username=linuxium hostname=linuxium locales=en_US.UTF-8 keyboard-layouts=us linuxium-session=cinnamon2d" \
   --memtest none
+
+# 3b. Image compression & rootfs exclusions
+#     * Compress initramfs with XZ instead of Bookworm's default zstd (~50%
+#       smaller /live/initrd.img and /boot/initrd.img). Note: initramfs-tools
+#       sources /etc/initramfs-tools/conf.d/* with run-parts naming rules, so
+#       the filename must NOT contain a dot.
+#     * Exclude transient APT package indexes, build caches, backup state and
+#       logs from filesystem.squashfs via live-build's config/rootfs/excludes
+#       (keeping them in chroot/ during the build so binary_grub-efi and
+#       binary_package-lists can still query APT cleanly).
+mkdir -p config/includes.chroot/etc/initramfs-tools/conf.d config/rootfs
+cat > config/includes.chroot/etc/initramfs-tools/conf.d/linuxium-compress <<'EOF'
+COMPRESS=xz
+EOF
+cat > config/rootfs/excludes <<'EOF'
+boot/*.old
+tmp/*
+var/tmp/*
+var/cache/apt/archives/*.deb
+var/cache/apt/archives/lock
+var/cache/apt/pkgcache.bin
+var/cache/apt/srcpkgcache.bin
+var/cache/debconf/*-old
+var/lib/apt/lists/*_*
+var/lib/apt/lists/auxfiles/*
+var/lib/apt/lists/lock
+var/lib/dpkg/*-old
+var/log/*.log
+var/log/apt/*
+EOF
 
 # 4. Package list
 mkdir -p config/package-lists
@@ -201,14 +242,26 @@ libegl-mesa0
 libgbm1
 mesa-vulkan-drivers
 
-# Desktop
-cinnamon-desktop-environment
+# Desktop (cinnamon-core instead of cinnamon-desktop-environment: keeps the
+# full Cinnamon desktop + Nemo + control center + screensaver while skipping
+# ~1 GB of unrequested metapackage bloat such as Thunderbird, HexChat,
+# Sound Juicer, Totem, and all-weight Noto font bundles).
+cinnamon-core
 lightdm
 lightdm-gtk-greeter
 papirus-icon-theme
 librsvg2-common
 dmz-cursor-theme
 nemo
+nemo-fileroller
+gvfs-backends
+gvfs-fuse
+xdg-user-dirs
+xdg-user-dirs-gtk
+blueman
+system-config-printer
+sound-theme-freedesktop
+libreoffice-gtk3
 gnome-terminal
 gnome-system-monitor
 gedit
@@ -332,8 +385,16 @@ curl
 wget
 git
 nano
-fonts-noto
-fonts-dejavu
+xz-utils
+fonts-liberation
+fonts-noto-core
+fonts-noto-ui-core
+fonts-noto-mono
+fonts-noto-color-emoji
+fonts-noto-extra-
+fonts-noto-ui-extra-
+fonts-noto-cjk-extra-
+fonts-dejavu-core
 live-boot
 live-config
 live-config-systemd
@@ -3733,6 +3794,12 @@ if gwl_schema.is_file():
         gwl_schema.write_text(json.dumps(gwl, indent=2) + "\n", encoding="utf-8")
 PYHOOK
 
+# Drop unused Papirus variants before building icon caches (keep both Papirus
+# and Papirus-Dark: Papirus-Dark icons symlink into ../Papirus).
+rm -rf /usr/share/icons/Papirus-Light \
+       /usr/share/icons/ePapirus \
+       /usr/share/icons/ePapirus-Dark
+
 if command -v gtk-update-icon-cache >/dev/null 2>&1; then
   for icon_root in /usr/share/icons/hicolor /usr/share/icons/Papirus /usr/share/icons/Papirus-Dark; do
     if [ -d "$icon_root" ]; then
@@ -3753,6 +3820,20 @@ GRUB_CMDLINE_LINUX_DEFAULT="quiet splash loglevel=3"
 GRUB_BACKGROUND="/usr/share/backgrounds/linuxium/linuxium.png"
 GRUBCFG
 fi
+
+# Reclaim build-time caches, .deb archives, backup state, logs, and temp files
+# before binary_rootfs packs filesystem.squashfs. Keep /var/lib/apt/lists and
+# /usr/share/doc on disk in chroot/ so later live-build binary stages
+# (binary_rootfs, binary_grub-efi, binary_package-lists) still work; APT list
+# indexes are omitted from filesystem.squashfs via config/rootfs/excludes.
+apt-get autoremove --purge -y >/dev/null 2>&1 || true
+apt-get clean || true
+rm -rf /tmp/* /var/tmp/* /root/.cache \
+       /var/cache/apt/archives/*.deb \
+       /var/cache/debconf/*-old \
+       /var/lib/dpkg/*-old \
+       /var/log/*.log /var/log/apt/* \
+       /boot/*.old
 EOF
 chmod +x config/hooks/normal/0100-linuxium.hook.chroot
 # The hook above is a quoted heredoc (it must not be expanded by this
@@ -3766,7 +3847,14 @@ if grep -q '__LINUXIUM_VERSION__' config/hooks/normal/0100-linuxium.hook.chroot;
 fi
 
 # 10. Build the ISO
-"${SUDO[@]}" lb build
+#     Pass high-ratio SquashFS XZ options explicitly via `env` after sudo so
+#     sudo's env_reset cannot strip MKSQUASHFS_OPTIONS:
+#       -b 1048576       1 MiB SquashFS blocks (8x default 128 KiB window)
+#       -Xbcj x86        LZMA2 x86 CALL/JMP filter for ELF binaries/libs
+#       -Xdict-size 100% full 1 MiB LZMA2 dictionary per block
+#       -no-recovery     skip build-time recovery file generation
+MKSQUASHFS_OPTS="-b 1048576 -Xbcj x86 -Xdict-size 100% -no-recovery"
+"${SUDO[@]}" env MKSQUASHFS_OPTIONS="$MKSQUASHFS_OPTS" lb build
 
 # 11. Sanity checks: kernel/initrd/rootfs, both boot-menu backgrounds, the
 #     offline bootloader pool, and (most importantly) signed EFI binaries.
@@ -3814,6 +3902,7 @@ if [ -f binary/live/filesystem.squashfs ]; then
     "/etc/lightdm/lightdm.conf.d/50-linuxium.conf" \
     "/etc/X11/xorg.conf.d/20-linuxium-vm-kms.conf" \
     "/etc/default/locale" \
+    "/etc/initramfs-tools/conf.d/linuxium-compress" \
     "/usr/share/initramfs-tools/hooks/cryptroot" \
     "/usr/share/plymouth/themes/linuxium/linuxium.plymouth" \
     "/usr/share/plymouth/themes/linuxium/linuxium.script" \
@@ -3850,6 +3939,7 @@ if [ -f binary/live/filesystem.squashfs ]; then
     echo "ERROR: linuxium-welcome.desktop must not be installed as an openable app" >&2
     exit 1
   fi
+  SQUASHFS_BYTES="$(stat -c %s binary/live/filesystem.squashfs)"
   echo "Live root filesystem boot-component check: OK"
 else
   echo "ERROR: binary/live/filesystem.squashfs not found after build; cannot verify the live root filesystem" >&2
@@ -3941,9 +4031,35 @@ fi
 
 sha256sum "$ISO" > "${ISO}.sha256"
 
+# 12. Reclaim intermediate build trees and compress the verified ISO into a
+#     smaller .iso.xz archive (balenaEtcher and Rufus both flash .iso.xz
+#     directly without manual extraction, while raw .iso stays available for
+#     QEMU/VirtualBox/dd).
+"${SUDO[@]}" rm -rf chroot cache binary
+
+COMPRESSED_ISO="${ISO}.xz"
+echo "Compressing ${ISO#./} -> ${COMPRESSED_ISO#./} (xz -T0 -${LINUXIUM_XZ_LEVEL})..."
+xz -k -f -T0 "-${LINUXIUM_XZ_LEVEL}" "$ISO"
+if [ ! -s "$COMPRESSED_ISO" ]; then
+  echo "ERROR: compressed image $COMPRESSED_ISO was not created" >&2
+  exit 1
+fi
+sha256sum "$COMPRESSED_ISO" > "${COMPRESSED_ISO}.sha256"
+
+ISO_BYTES="$(stat -c %s "$ISO")"
+XZ_BYTES="$(stat -c %s "$COMPRESSED_ISO")"
+SQUASHFS_MIB="$(awk -v b="${SQUASHFS_BYTES:-0}" 'BEGIN { printf "%.1f MiB", b / 1048576 }')"
+ISO_MIB="$(awk -v b="$ISO_BYTES" 'BEGIN { printf "%.1f MiB", b / 1048576 }')"
+XZ_MIB="$(awk -v b="$XZ_BYTES" 'BEGIN { printf "%.1f MiB", b / 1048576 }')"
+SAVED_PCT="$(awk -v raw="$ISO_BYTES" -v cmp="$XZ_BYTES" 'BEGIN { if (raw > 0) printf "%.1f%%", (1 - cmp / raw) * 100; else print "0.0%" }')"
+
 echo
-echo "Done. ISO: $(pwd)/${ISO#./}"
-echo "Checksum:  $(pwd)/${ISO#./}.sha256"
+echo "Done."
+echo "  Live SquashFS:      ${SQUASHFS_MIB}"
+echo "  Bootable ISO:       $(pwd)/${ISO#./} (${ISO_MIB})"
+echo "  ISO SHA-256:        $(pwd)/${ISO#./}.sha256"
+echo "  Compressed ISO:     $(pwd)/${COMPRESSED_ISO#./} (${XZ_MIB}, ${SAVED_PCT} smaller)"
+echo "  Compressed SHA-256: $(pwd)/${COMPRESSED_ISO#./}.sha256"
 echo "Test it with:"
 echo "  BIOS/MBR:  qemu-system-x86_64 -m 4096 -enable-kvm -cdrom ${ISO#./}"
 echo "  UEFI+SB:   qemu-system-x86_64 -m 4096 -enable-kvm -machine q35 \\"
