@@ -2,12 +2,13 @@
 # Linuxium ISO builder: Debian 12 (bookworm) + Cinnamon, using live-build.
 # Run on Debian/Ubuntu (or inside a Debian VM/container with root access).
 #
-# Usage:  ./build-linuxium.sh [wallpaper.png] [logo.png] [grub-background.png] [extra-wallpapers-dir]
+# Usage:  ./build-linuxium.sh [wallpaper.png] [logo.png] [grub-background.png] [extra-wallpapers-dir] [intro.png]
 #   wallpaper.png        desktop + login wallpaper          (default ./wallpaper.png)
 #   logo.png             boot splash (Plymouth) + neofetch  (default ./lynx.png)
 #   grub-background.png  boot-menu background               (default ./grub-bg.png)
 #   extra-wallpapers-dir optional folder of your own .jpg/.png wallpapers
 #                                                              (default ./wallpapers)
+#   intro.png            welcome popup banner               (default ./intro.png)
 #
 # What changed in this fixed version:
 #   * Boot-menu background actually works in BOTH firmware modes. The old
@@ -59,12 +60,13 @@ WALLPAPER="${1:-$SCRIPT_DIR/wallpaper.png}"
 LOGO="${2:-$SCRIPT_DIR/lynx.png}"
 GRUB_BG="${3:-$SCRIPT_DIR/grub-bg.png}"
 EXTRA_WALLPAPERS_DIR="${4:-$SCRIPT_DIR/wallpapers}"
+INTRO="${5:-$SCRIPT_DIR/intro.png}"
 WORK="linuxium-build"
 
 if [ "$(id -u)" -eq 0 ]; then SUDO=(); else SUDO=(sudo); fi
 
 usage() {
-  echo "Usage: $0 [wallpaper.png] [logo.png] [grub-background.png] [extra-wallpapers-dir]"
+  echo "Usage: $0 [wallpaper.png] [logo.png] [grub-background.png] [extra-wallpapers-dir] [intro.png]"
   echo "  All arguments are optional; the defaults are the images shipped in this repository."
 }
 
@@ -74,8 +76,8 @@ case "${1:-}" in
     exit 0
     ;;
 esac
-if [ "$#" -gt 4 ]; then
-  echo "ERROR: too many arguments (expected at most 4)" >&2
+if [ "$#" -gt 5 ]; then
+  echo "ERROR: too many arguments (expected at most 5)" >&2
   usage >&2
   exit 1
 fi
@@ -88,7 +90,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-for f in "$WALLPAPER" "$LOGO" "$GRUB_BG"; do
+for f in "$WALLPAPER" "$LOGO" "$GRUB_BG" "$INTRO"; do
   if [ ! -f "$f" ]; then
     echo "File not found: $f"
     usage
@@ -98,6 +100,7 @@ done
 WALLPAPER="$(realpath "$WALLPAPER")"
 LOGO="$(realpath "$LOGO")"
 GRUB_BG="$(realpath "$GRUB_BG")"
+INTRO="$(realpath "$INTRO")"
 EXTRA_WALLPAPERS_DIR="$(realpath -m "$EXTRA_WALLPAPERS_DIR")"
 # Downloaded wallpaper sources are cached OUTSIDE the build tree so that
 # local rebuilds do not re-download them every time.
@@ -1151,6 +1154,11 @@ AUTO_INC="config/includes.chroot/etc/xdg/autostart"
 DOC_LINUXIUM="config/includes.chroot/usr/share/doc/linuxium"
 mkdir -p "$BIN_INC" "$LIB_LINUXIUM" "$APP_INC" "$AUTO_INC" "$DOC_LINUXIUM"
 
+# Intro banner for the welcome popup (normalized to 840px wide PNG24 so the
+# popup can scale it to dialog width without a huge source image).
+mkdir -p config/includes.chroot/usr/share/linuxium
+"${IM[@]}" "$INTRO" -auto-orient -resize 840x -strip "PNG24:config/includes.chroot/usr/share/linuxium/intro.png"
+
 cat > "$LIB_LINUXIUM/welcome-popup" <<'PYEOF'
 #!/usr/bin/env python3
 """Linuxium Welcome - live-session startup popup dialog (GTK 3)."""
@@ -1166,13 +1174,14 @@ gi.require_version("GdkPixbuf", "2.0")
 from gi.repository import Gdk, GdkPixbuf, Gtk  # noqa: E402
 
 LOGO = "/usr/share/pixmaps/linuxium.png"
+INTRO = "/usr/share/linuxium/intro.png"
 DISABLE_FILE = Path.home() / ".config" / "linuxium" / "no-welcome"
 
 
 class WelcomePopup(Gtk.Window):
     def __init__(self):
         Gtk.Window.__init__(self, title="Welcome to Linuxium")
-        self.set_default_size(460, -1)
+        self.set_default_size(480, -1)
         self.set_resizable(False)
         self.set_border_width(20)
         self.set_position(Gtk.WindowPosition.CENTER)
@@ -1184,6 +1193,15 @@ class WelcomePopup(Gtk.Window):
 
         outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
         self.add(outer)
+
+        # Intro banner (Welcome to linuxium + Lynx + snowman) across the top.
+        try:
+            banner = GdkPixbuf.Pixbuf.new_from_file_at_scale(INTRO, 420, -1, True)
+            banner_img = Gtk.Image.new_from_pixbuf(banner)
+            banner_img.set_halign(Gtk.Align.CENTER)
+            outer.pack_start(banner_img, False, False, 0)
+        except Exception:
+            pass
 
         header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=14)
         try:
@@ -4842,6 +4860,7 @@ if [ -f binary/live/filesystem.squashfs ]; then
     "/usr/share/plymouth/themes/linuxium/progress-bar.png" \
     "/etc/initramfs-tools/modules" \
     "/usr/share/linuxium/panel-icon.png" \
+    "/usr/share/linuxium/intro.png" \
     "/usr/share/icons/Papirus-Dark/index.theme" \
     "/usr/share/cinnamon/applets/search-bar@linuxium/applet.js" \
     "/usr/share/cinnamon/applets/search-bar@linuxium/metadata.json" \
