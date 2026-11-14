@@ -22,9 +22,11 @@
 #   * UEFI Secure Boot: "--uefi-secure-boot enable" (the default "auto"
 #     silently falls back to an UNSIGNED image) plus the Debian-signed
 #     shim/GRUB packages inside the image, and a post-build signature check.
-#   * Calamares graphical installer (Debian's tested configuration, with
-#     Linuxium branding) + a "Welcome to Linuxium" app that pops up in the
-#     live session.
+#   * Linuxium Experience custom installer (dark GTK app with circular
+#     step buttons) + Calamares fallback + a "Welcome to Linuxium" popup.
+#   * Wine 8.0 + Winetricks for Windows apps, VMware Open VM Tools +
+#     vmwgfx 3D support, and a Tetris-style Plymouth boot splash where
+#     falling blocks build Lynx the penguin.
 #   * Extra wallpapers (New York City, mountains, beach, forest, canyon,
 #     Tokyo, Nebula) downloaded from Wikimedia Commons, plus anything you
 #     drop in ./wallpapers/.
@@ -180,9 +182,19 @@ lb config \
 #       logs from filesystem.squashfs via live-build's config/rootfs/excludes
 #       (keeping them in chroot/ during the build so binary_grub-efi and
 #       binary_package-lists can still query APT cleanly).
-mkdir -p config/includes.chroot/etc/initramfs-tools/conf.d config/rootfs
+mkdir -p config/includes.chroot/etc/initramfs-tools/conf.d config/includes.chroot/etc/initramfs-tools config/rootfs
 cat > config/includes.chroot/etc/initramfs-tools/conf.d/linuxium-compress <<'EOF'
 COMPRESS=xz
+EOF
+# VMware guest drivers in the initramfs so the live ISO and installed
+# systems boot on VMware SVGA (vmwgfx) with 3D acceleration and VMCI
+# transport available before / is mounted. These modules ship with the
+# Debian kernel; listing them here only bakes them into the initramfs.
+cat > config/includes.chroot/etc/initramfs-tools/modules <<'EOF'
+vmwgfx
+vmw_balloon
+vmw_vmci
+vmw_vsock_vmci_transport
 EOF
 cat > config/rootfs/excludes <<'EOF'
 boot/*.old
@@ -314,17 +326,42 @@ synaptic
 gdebi
 htop
 
+# Windows app support: Wine 8.0 (Bookworm) + Winetricks.
+# wine/wine64/libwine/fonts-wine/wine-binfmt are all in Bookworm main;
+# winetricks is in contrib (enabled via --archive-areas). wine-binfmt
+# registers .exe/.msi handling so double-clicking a Windows installer
+# opens Wine. cabextract/p7zip-full/unzip are Winetricks helpers for
+# extracting VC++ runtimes, fonts and DLLs into a Wine prefix.
+# NOTE: 32-bit Windows apps need the i386 architecture
+# (dpkg --add-architecture i386 && apt install wine32 libwine:i386);
+# the live image ships 64-bit Wine out of the box so the ISO stays
+# amd64-only. See /usr/share/doc/linuxium/README.md.
+wine
+wine64
+libwine
+fonts-wine
+wine-binfmt
+winetricks
+cabextract
+p7zip-full
+unzip
+
 # Graphical installer: Calamares + Debian's tested live configuration
 # (offline pool handling, EFI bootloader helpers, "install-debian" launcher).
 # Linuxium branding for it is added in section 5f / the hook in section 9.
+# Calamares stays installed as a fallback backend; the primary installer
+# is the custom "Linuxium Experience" (section 5h) which does its own
+# partitioning/copy/GRUB install and only falls back to Calamares if
+# the user explicitly asks for advanced partitioning.
 calamares
 calamares-settings-debian
 
-# Tools Calamares and disk work need in the live session
+# Tools Calamares, Linuxium Experience and disk work need in the live session
 squashfs-tools
 rsync
 efibootmgr
 dosfstools
+parted
 btrfs-progs
 xfsprogs
 lvm2
@@ -342,7 +379,9 @@ os-prober
 # grub-install work for both BIOS and UEFI; grub-pc / grub-efi-amd64
 # themselves are installed onto the target disk by Calamares from the
 # ISO's /pool (they conflict with each other, so they cannot both live
-# in the live system).
+# in the live system). Linuxium Experience uses the same *-bin packages
+# from the live system directly (grub-install --target=...), so it also
+# works fully offline without the /pool.
 grub-common
 grub2-common
 grub-pc-bin
@@ -351,18 +390,27 @@ grub-efi-amd64-signed
 shim-signed
 mokutil
 
-# Linuxium Welcome app (Python + GTK 3)
+# Linuxium Welcome + Linuxium Experience installer (Python + GTK 3)
 python3-gi
 gir1.2-gtk-3.0
 xdg-utils
 
-# Guest integration for QEMU/KVM, SPICE viewers and VMware hosts
-# (open-vm-tools units use ConditionVirtualization=vmware so they stay
-# completely inert on bare metal, VirtualBox and QEMU/KVM).
+# Guest integration for QEMU/KVM, SPICE viewers and VMware hosts.
+# open-vm-tools units use ConditionVirtualization=vmware so they stay
+# completely inert on bare metal, VirtualBox and QEMU/KVM.
+# VMware: open-vm-tools (vmtoolsd daemon, time sync, shared folders,
+# power ops) + open-vm-tools-desktop (clipboard, drag-and-drop, display
+# resize for graphical guests) + xserver-xorg-video-vmware (legacy
+# SVGA) + vmwgfx KMS (modern SVGA 3D via Mesa). libdrm/libgbm1 are
+# named explicitly so vmwgfx never goes missing. The vmwgfx kernel
+# modules are also baked into the initramfs via
+# /etc/initramfs-tools/modules (section 3b).
 qemu-guest-agent
 spice-vdagent
 open-vm-tools
 open-vm-tools-desktop
+libdrm
+libgbm1
 
 # Branding
 plymouth
@@ -582,18 +630,43 @@ for icon_px in 16 24 32 48 64 128 256; do
     "PNG32:${icon_dir}/linuxium.png"
 done
 
-# 5e. Boot splash (Plymouth theme using the logo + animated progress bar)
+# 5e. Boot splash: Tetris-style Plymouth theme where falling blocks build
+#     Lynx the penguin. Dark background (#0f1219) with a 10x16 Tetris well;
+#     coloured blocks drop from the top, stack up, and once enough blocks
+#     have landed the Lynx logo + "Linuxium" title fade in above the stack
+#     with a gentle bob. The password/message callbacks are not decoration:
+#     a Plymouth script theme without them gives an encrypted installed
+#     system no visible unlock prompt, which looks exactly like a boot hang.
 PLY_DIR="config/includes.chroot/usr/share/plymouth/themes/linuxium"
 mkdir -p "$PLY_DIR"
-"${IM[@]}" "$LOGO" -auto-orient -background white -alpha remove -alpha off \
-  -resize 256x256 -strip "PNG24:$PLY_DIR/logo.png"
-"${IM[@]}" -size 192x4 xc:'#e5e7eb' -strip "PNG24:$PLY_DIR/progress-track.png"
-"${IM[@]}" -size 56x4 xc:'#20242a' -strip "PNG24:$PLY_DIR/progress-bar.png"
+# Lynx logo sized for the Tetris theme (dark background so it blends).
+"${IM[@]}" "$LOGO" -auto-orient -background '#0f1219' -alpha remove -alpha off \
+  -resize 128x128 -strip "PNG24:$PLY_DIR/logo.png"
+# Tetris block images (22x22, classic Tetris colours, dark border).
+for _block_idx in 0 1 2 3 4 5 6; do
+  case "$_block_idx" in
+    0) _block_color='#00f0f0' ;;
+    1) _block_color='#f0f000' ;;
+    2) _block_color='#a000f0' ;;
+    3) _block_color='#00f000' ;;
+    4) _block_color='#f00000' ;;
+    5) _block_color='#3b82f6' ;;
+    6) _block_color='#f0a000' ;;
+  esac
+  "${IM[@]}" -size 22x22 "xc:${_block_color}" -stroke '#0f1219' -strokewidth 2 \
+    -draw "rectangle 1,1 20,20" -strip "PNG24:$PLY_DIR/block-${_block_idx}.png"
+done
+# Tetris well background (228x360: 10x16 grid of 22px cells + 4px border).
+"${IM[@]}" -size 228x360 xc:'#1a1e28' -stroke '#3b82f6' -strokewidth 2 \
+  -draw "rectangle 1,1 226,358" -strip "PNG24:$PLY_DIR/well.png"
+# Kept for compatibility with older sanity checks (unused by Tetris theme).
+"${IM[@]}" -size 192x4 xc:'#2a3040' -strip "PNG24:$PLY_DIR/progress-track.png"
+"${IM[@]}" -size 56x4 xc:'#3b82f6' -strip "PNG24:$PLY_DIR/progress-bar.png"
 
 cat > "$PLY_DIR/linuxium.plymouth" <<'EOF'
 [Plymouth Theme]
 Name=Linuxium
-Description=Linuxium boot splash
+Description=Linuxium Tetris boot splash - blocks build Lynx
 ModuleName=script
 
 [script]
@@ -601,33 +674,61 @@ ImageDir=/usr/share/plymouth/themes/linuxium
 ScriptFile=/usr/share/plymouth/themes/linuxium/linuxium.script
 EOF
 
-# White background to match the logo image. Change the numbers (0 to 1) for another colour.
-# The callbacks below are not decoration: a Plymouth script theme without
-# password/message handlers gives an encrypted installed system no visible
-# unlock prompt, which looks exactly like a boot hang on the logo.
 cat > "$PLY_DIR/linuxium.script" <<'EOF'
-Window.SetBackgroundTopColor(1, 1, 1);
-Window.SetBackgroundBottomColor(1, 1, 1);
+Window.SetBackgroundTopColor(0.06, 0.07, 0.10);
+Window.SetBackgroundBottomColor(0.06, 0.07, 0.10);
+
+block_size = 22;
+well_cols = 10;
+well_rows = 16;
+well_w = block_size * well_cols;
+well_h = block_size * well_rows;
+well_x = Window.GetX() + (Window.GetWidth() - well_w) / 2;
+well_y = Window.GetY() + (Window.GetHeight() - well_h) / 2 + 24;
+
+well.image = Image("well.png");
+well.sprite = Sprite(well.image);
+well.sprite.SetPosition(well_x - 4, well_y - 4, 90);
+
+for (c = 0; c < 7; c++)
+	block_images[c] = Image("block-" + c + ".png");
+
+max_blocks = 40;
+for (i = 0; i < max_blocks; i++)
+{
+	block_sprites[i] = Sprite();
+	block_sprites[i].SetOpacity(0);
+	block_col[i] = 0;
+	block_row[i] = 0;
+	block_falling[i] = 0;
+	block_landed[i] = 0;
+	block_color[i] = 0;
+}
+
+for (c = 0; c < well_cols; c++)
+	stack[c] = 0;
 
 logo.image = Image("logo.png");
 logo.sprite = Sprite(logo.image);
+logo.sprite.SetOpacity(0);
 logo.x = Window.GetX() + (Window.GetWidth() - logo.image.GetWidth()) / 2;
-logo.y = Window.GetY() + (Window.GetHeight() - logo.image.GetHeight()) / 2;
-logo.sprite.SetPosition(logo.x, logo.y, 100);
+logo.y = well_y - logo.image.GetHeight() - 18;
+logo.sprite.SetPosition(logo.x, logo.y, 110);
 
-track.image = Image("progress-track.png");
-track.sprite = Sprite(track.image);
-track.x = Window.GetX() + (Window.GetWidth() - track.image.GetWidth()) / 2;
-track.y = logo.y + logo.image.GetHeight() + 28;
-track.sprite.SetPosition(track.x, track.y, 101);
-
-bar.image = Image("progress-bar.png");
-bar.sprite = Sprite(bar.image);
-bar.travel = track.image.GetWidth() - bar.image.GetWidth();
-bar.sprite.SetPosition(track.x, track.y, 102);
+title.image = Image.Text("Linuxium", 1, 1, 1);
+title.sprite = Sprite(title.image);
+title.sprite.SetOpacity(0);
+title.x = Window.GetX() + (Window.GetWidth() - title.image.GetWidth()) / 2;
+title.y = well_y + well_h + 18;
+title.sprite.SetPosition(title.x, title.y, 110);
 
 dialog_active = 0;
 tick = 0;
+spawn_timer = 0;
+fall_timer = 0;
+landed_count = 0;
+lynx_built = 0;
+logo_opacity = 0;
 
 prompt_sprite = Sprite();
 prompt_sprite.SetPosition(0, 0, 10000);
@@ -646,17 +747,84 @@ fun refresh_callback()
 	tick++;
 	if (dialog_active == 0)
 	{
-		track.sprite.SetOpacity(1);
-		bar.sprite.SetOpacity(1);
-		phase = (tick % 120) / 60.0;
-		if (phase > 1.0)
-			phase = 2.0 - phase;
-		bar.sprite.SetX(track.x + bar.travel * phase);
+		if (lynx_built == 0)
+		{
+			spawn_timer++;
+			if (spawn_timer > 16)
+			{
+				spawn_timer = 0;
+				spawned = 0;
+				for (i = 0; i < max_blocks; i++)
+				{
+					if (spawned == 0 && block_landed[i] == 0 && block_falling[i] == 0)
+					{
+						block_col[i] = Math.Int(tick * 7 + i * 3) % well_cols;
+						block_row[i] = 0;
+						block_color[i] = Math.Int(tick + i) % 7;
+						block_falling[i] = 1;
+						block_sprites[i].SetImage(block_images[block_color[i]]);
+						block_sprites[i].SetOpacity(1);
+						spawned = 1;
+					}
+				}
+			}
+			fall_timer++;
+			if (fall_timer > 4)
+			{
+				fall_timer = 0;
+				for (i = 0; i < max_blocks; i++)
+				{
+					if (block_falling[i] == 1)
+					{
+						block_row[i]++;
+						col = block_col[i];
+						if (block_row[i] >= well_rows - stack[col])
+						{
+							block_row[i] = well_rows - stack[col] - 1;
+							block_falling[i] = 0;
+							block_landed[i] = 1;
+							stack[col]++;
+							landed_count++;
+						}
+						bx = well_x + block_col[i] * block_size;
+						by = well_y + block_row[i] * block_size;
+						block_sprites[i].SetPosition(bx, by, 100);
+					}
+				}
+			}
+			for (i = 0; i < max_blocks; i++)
+			{
+				if (block_falling[i] == 1)
+				{
+					bx = well_x + block_col[i] * block_size;
+					by = well_y + block_row[i] * block_size;
+					block_sprites[i].SetPosition(bx, by, 100);
+				}
+			}
+			if (landed_count >= 28)
+				lynx_built = 1;
+		}
+		else
+		{
+			if (logo_opacity < 1)
+			{
+				logo_opacity += 0.02;
+				if (logo_opacity > 1)
+					logo_opacity = 1;
+				logo.sprite.SetOpacity(logo_opacity);
+				title.sprite.SetOpacity(logo_opacity);
+			}
+			bob = Math.Sin(tick / 20.0) * 4;
+			logo.sprite.SetY(logo.y + bob);
+		}
 	}
 	else
 	{
-		track.sprite.SetOpacity(0);
-		bar.sprite.SetOpacity(0);
+		for (i = 0; i < max_blocks; i++)
+			block_sprites[i].SetOpacity(0);
+		well.sprite.SetOpacity(0);
+		logo.sprite.SetOpacity(0);
+		title.sprite.SetOpacity(0);
 	}
 }
 
@@ -677,12 +845,12 @@ fun display_password_callback(prompt_text, bullets)
 	dialog_active = 1;
 	if (!prompt_text || prompt_text == "")
 		prompt_text = "Password:";
-	prompt_image = Image.Text(prompt_text, 0, 0, 0);
+	prompt_image = Image.Text(prompt_text, 1, 1, 1);
 	if (prompt_image)
 	{
 		prompt_x = Math.Max(Window.GetX(),
 			Window.GetX() + (Window.GetWidth() - prompt_image.GetWidth()) / 2);
-		prompt_y = logo.y + logo.image.GetHeight() + 24;
+		prompt_y = well_y + well_h + 18;
 		prompt_sprite.SetImage(prompt_image);
 		prompt_sprite.SetPosition(prompt_x, prompt_y, 10000);
 		prompt_sprite.SetOpacity(1);
@@ -690,7 +858,7 @@ fun display_password_callback(prompt_text, bullets)
 	}
 	else
 	{
-		entry_y = logo.y + logo.image.GetHeight() + 48;
+		entry_y = well_y + well_h + 42;
 	}
 
 	bullet_text = "";
@@ -699,7 +867,7 @@ fun display_password_callback(prompt_text, bullets)
 
 	if (bullets > 0)
 	{
-		entry_image = Image.Text(bullet_text, 0, 0, 0);
+		entry_image = Image.Text(bullet_text, 1, 1, 1);
 		if (entry_image)
 		{
 			entry_x = Math.Max(Window.GetX(),
@@ -722,12 +890,12 @@ fun display_question_callback(prompt_text, entry_text)
 		prompt_text = "Input:";
 	if (!entry_text)
 		entry_text = "";
-	question_image = Image.Text(prompt_text + " " + entry_text, 0, 0, 0);
+	question_image = Image.Text(prompt_text + " " + entry_text, 1, 1, 1);
 	if (question_image)
 	{
 		question_x = Math.Max(Window.GetX(),
 			Window.GetX() + (Window.GetWidth() - question_image.GetWidth()) / 2);
-		question_y = logo.y + logo.image.GetHeight() + 24;
+		question_y = well_y + well_h + 18;
 		prompt_sprite.SetImage(question_image);
 		prompt_sprite.SetPosition(question_x, question_y, 10000);
 		prompt_sprite.SetOpacity(1);
@@ -742,7 +910,7 @@ fun display_message_callback(message_text)
 		message_sprite.SetOpacity(0);
 		return;
 	}
-	message_image = Image.Text(message_text, 0, 0, 0);
+	message_image = Image.Text(message_text, 1, 1, 1);
 	if (message_image)
 	{
 		message_x = Math.Max(Window.GetX(),
@@ -970,9 +1138,12 @@ Presentation
 }
 QMLEOF
 
-# 5h. Live-only startup welcome popup + "Install Linuxium" desktop launcher
+# 5h. Live-only startup welcome popup + "Linuxium Experience" installer
 # NOTE: The intro is strictly a one-time live-session popup dialog (not an
 # openable application in the menu, taskbar, search bar, or $PATH).
+# The primary installer is the custom "Linuxium Experience" (dark GTK app
+# with circular step buttons); Calamares stays installed as a fallback
+# backend for advanced partitioning.
 BIN_INC="config/includes.chroot/usr/bin"
 LIB_LINUXIUM="config/includes.chroot/usr/lib/linuxium"
 APP_INC="config/includes.chroot/usr/share/applications"
@@ -1040,8 +1211,8 @@ class WelcomePopup(Gtk.Window):
         info.set_markup(
             "You are running the <b>Linuxium</b> live session — everything works "
             "right out of the box without touching your hard drive.\n\n"
-            "Ready to install permanently? Click <b>Install Linuxium</b> below or "
-            "use the <b>Install Linuxium</b> shortcut right on your desktop."
+            "Ready to install permanently? Click <b>Linuxium Experience</b> below or "
+            "use the <b>Linuxium Experience</b> shortcut right on your desktop."
         )
         info.set_line_wrap(True)
         info.set_max_width_chars(54)
@@ -1056,7 +1227,7 @@ class WelcomePopup(Gtk.Window):
         dismiss_btn = Gtk.Button(label="Start Exploring")
         dismiss_btn.connect("clicked", lambda _b: self.destroy())
 
-        install_btn = Gtk.Button(label="Install Linuxium")
+        install_btn = Gtk.Button(label="Linuxium Experience")
         install_btn.get_style_context().add_class("suggested-action")
         install_btn.connect("clicked", self.on_install)
 
@@ -1077,7 +1248,7 @@ class WelcomePopup(Gtk.Window):
     def on_install(self, _button):
         try:
             subprocess.Popen(
-                ["/usr/bin/install-linuxium"],
+                ["/usr/bin/linuxium-experience"],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 start_new_session=True,
@@ -1104,7 +1275,7 @@ chmod +x "$LIB_LINUXIUM/welcome-popup"
 cat > "$LIB_LINUXIUM/welcome-autostart" <<'EOF'
 #!/bin/sh
 # Show the Welcome popup once per LIVE session only and guarantee the
-# "Install Linuxium" desktop icon is present and trusted.
+# "Linuxium Experience" desktop icon is present and trusted.
 # An installed system has neither "boot=live" on its kernel command line
 # nor /run/live/medium, so this quietly does nothing after installation.
 case " $(cat /proc/cmdline 2>/dev/null) " in
@@ -1120,6 +1291,9 @@ if command -v xdg-user-dir >/dev/null 2>&1; then
   fi
 fi
 mkdir -p "$_DESKTOP_DIR" 2>/dev/null || true
+if [ -f /usr/share/applications/linuxium-experience.desktop ] && [ ! -f "$_DESKTOP_DIR/linuxium-experience.desktop" ]; then
+  cp -f /usr/share/applications/linuxium-experience.desktop "$_DESKTOP_DIR/linuxium-experience.desktop" 2>/dev/null || true
+fi
 if [ -f /usr/share/applications/install-linuxium.desktop ] && [ ! -f "$_DESKTOP_DIR/install-linuxium.desktop" ]; then
   cp -f /usr/share/applications/install-linuxium.desktop "$_DESKTOP_DIR/install-linuxium.desktop" 2>/dev/null || true
 fi
@@ -1151,68 +1325,799 @@ exit $?
 EOF
 chmod +x "$LIB_LINUXIUM/welcome-autostart"
 
-cat > "$BIN_INC/install-linuxium" <<'EOF'
+cat > "$LIB_LINUXIUM/linuxium-experience" <<'PYEOF'
+#!/usr/bin/env python3
+"""Linuxium Experience - custom Linuxium installer (GTK 3, dark theme).
+
+Smooth dark UI with circular step buttons that rotate around the centre.
+Performs a real install: partition -> format -> copy live filesystem ->
+fstab -> GRUB -> user -> cleanup. Runs as root (see /usr/bin wrapper).
+Calamares remains available as an advanced fallback.
+"""
+import math
+import os
+import re
+import subprocess
+import sys
+import threading
+
+import gi
+
+gi.require_version("Gdk", "3.0")
+gi.require_version("Gtk", "3.0")
+gi.require_version("GdkPixbuf", "2.0")
+from gi.repository import Gdk, GdkPixbuf, GLib, Gtk  # noqa: E402
+
+LOGO = "/usr/share/pixmaps/linuxium.png"
+VERSION = "1.1"
+TARGET = "/tmp/linuxium-target"
+
+DARK_CSS = """
+window { background-color: #12141a; }
+headerbar { background-color: #1a1e28; }
+button { background-color: #2a3040; color: #ffffff; border-radius: 10px; border: 1px solid #3a4155; padding: 8px 18px; }
+button:hover { background-color: #3b82f6; }
+button:disabled { background-color: #1e2128; color: #6b7280; }
+button.suggested-action { background-color: #3b82f6; color: #ffffff; }
+button.suggested-action:hover { background-color: #2563eb; }
+entry, combobox entry { background-color: #1a1e28; color: #ffffff; border: 1px solid #3a4155; border-radius: 8px; padding: 6px 10px; }
+label { color: #ffffff; }
+label.muted { color: #9aa0b0; }
+progressbar { background-color: #2a3040; border-radius: 8px; }
+progressbar progress { background-color: #3b82f6; border-radius: 8px; }
+textview { background-color: #0f1219; color: #d1d5db; }
+"""
+
+STEPS = ["Welcome", "Disk", "User", "Install", "Finish"]
+
+
+def run(cmd, log=None):
+    if log:
+        log("  $ " + " ".join(cmd))
+    p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+    if log and p.stdout:
+        for line in p.stdout.splitlines():
+            log("  " + line)
+    if p.returncode != 0:
+        raise RuntimeError("Command failed (%d): %s" % (p.returncode, " ".join(cmd)))
+    return p.stdout
+
+
+def list_disks():
+    out = subprocess.run(
+        ["lsblk", "-d", "-o", "NAME,SIZE,MODEL,TRAN", "--noheadings"],
+        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
+    ).stdout
+    disks = []
+    for line in out.strip().splitlines():
+        parts = line.split(None, 1)
+        if not parts:
+            continue
+        name = parts[0].strip()
+        rest = parts[1].strip() if len(parts) > 1 else ""
+        if not name.startswith(("sd", "nvme", "vd", "hd", "mmcblk")):
+            continue
+        disks.append((name, rest))
+    return disks
+
+
+def is_live_disk(name):
+    # Live medium is mounted at /run/live/medium; find its source disk.
+    try:
+        out = subprocess.run(
+            ["findmnt", "-n", "-o", "SOURCE", "/run/live/medium"],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
+        ).stdout.strip()
+        if out:
+            # e.g. /dev/sdb1 or /dev/loop0
+            dev = out.split()[0]
+            if dev.startswith("/dev/"):
+                base = dev[5:]
+                # strip partition suffix: sdb1 -> sdb, nvme0n1p1 -> nvme0n1
+                m = re.match(r"^(nvme\d+n\d+|mmcblk\d+|sd[a-z]+|vd[a-z]+|hd[a-z]+)", base)
+                if m and m.group(1) == name:
+                    return True
+    except Exception:
+        pass
+    return False
+
+
+def is_efi():
+    return os.path.isdir("/sys/firmware/efi")
+
+
+class CircularNav(Gtk.DrawingArea):
+    def __init__(self, on_select):
+        super().__init__()
+        self.set_size_request(240, 240)
+        self.on_select = on_select
+        self.current = 0
+        self.rotation = 0.0
+        self.target_rotation = 0.0
+        self.anim_id = None
+        self.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
+        self.connect("button-press-event", self._on_press)
+
+    def set_current(self, idx):
+        self.current = idx
+        # Rotate so current step sits at the top (-90 degrees).
+        self.target_rotation = -math.pi / 2 - idx * (2 * math.pi / len(STEPS))
+        if self.anim_id is None:
+            self.anim_id = GLib.timeout_add(16, self._animate)
+
+    def _animate(self):
+        diff = self.target_rotation - self.rotation
+        if abs(diff) < 0.01:
+            self.rotation = self.target_rotation
+            self.queue_draw()
+            self.anim_id = None
+            return False
+        self.rotation += diff * 0.18
+        self.queue_draw()
+        return True
+
+    def _positions(self):
+        cx, cy, r = 120, 120, 82
+        pts = []
+        for i in range(len(STEPS)):
+            ang = self.rotation + i * (2 * math.pi / len(STEPS))
+            pts.append((cx + r * math.cos(ang), cy + r * math.sin(ang)))
+        return pts
+
+    def _on_press(self, widget, event):
+        pts = self._positions()
+        for i, (x, y) in enumerate(pts):
+            if math.hypot(event.x - x, event.y - y) <= 26:
+                self.on_select(i)
+                return True
+        return False
+
+    def do_draw(self, cr):
+        alloc = self.get_allocation()
+        cr.set_source_rgb(0.07, 0.08, 0.11)
+        cr.rectangle(0, 0, alloc.width, alloc.height)
+        cr.fill()
+        cx, cy, r = 120, 120, 82
+        # Connecting circle
+        cr.set_source_rgb(0.23, 0.26, 0.33)
+        cr.set_line_width(2)
+        cr.arc(cx, cy, r, 0, 2 * math.pi)
+        cr.stroke()
+        pts = self._positions()
+        for i, (x, y) in enumerate(pts):
+            if i == self.current:
+                cr.set_source_rgb(0.23, 0.51, 0.96)
+            else:
+                cr.set_source_rgb(0.16, 0.18, 0.25)
+            cr.arc(x, y, 24, 0, 2 * math.pi)
+            cr.fill()
+            cr.set_source_rgb(1, 1, 1)
+            cr.set_line_width(1.5)
+            cr.arc(x, y, 24, 0, 2 * math.pi)
+            cr.stroke()
+            cr.set_source_rgb(1, 1, 1)
+            cr.select_font_face("Sans")
+            cr.set_font_size(15)
+            cr.move_to(x - 4, y + 5)
+            cr.show_text(str(i + 1))
+        # Centre label
+        cr.set_source_rgb(0.60, 0.63, 0.69)
+        cr.set_font_size(11)
+        cr.move_to(cx - 32, cy + 4)
+        cr.show_text(STEPS[self.current])
+
+
+class Experience(Gtk.Window):
+    def __init__(self):
+        Gtk.Window.__init__(self, title="Linuxium Experience")
+        self.set_default_size(920, 640)
+        self.set_resizable(True)
+        self.set_position(Gtk.WindowPosition.CENTER)
+        self.connect("destroy", Gtk.main_quit)
+        self.step = 0
+        self.selected_disk = None
+        self.cancelled = False
+        self.install_thread = None
+
+        css = Gtk.CssProvider()
+        css.load_from_data(DARK_CSS.encode())
+        Gtk.StyleContext.add_provider_for_screen(
+            Gdk.Screen.get_default(), css,
+            Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION,
+        )
+
+        outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        self.add(outer)
+
+        header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        header.set_border_width(14)
+        try:
+            pix = GdkPixbuf.Pixbuf.new_from_file_at_scale(LOGO, 48, 48, True)
+            header.pack_start(Gtk.Image.new_from_pixbuf(pix), False, False, 0)
+        except Exception:
+            pass
+        titles = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+        t = Gtk.Label()
+        t.set_markup('<span size="x-large" weight="bold">Linuxium Experience</span>')
+        t.set_halign(Gtk.Align.START)
+        s = Gtk.Label()
+        s.set_markup('<span size="small" color="#9aa0b0">Install Linuxium %s — luv from playerz</span>' % VERSION)
+        s.set_halign(Gtk.Align.START)
+        titles.pack_start(t, False, False, 0)
+        titles.pack_start(s, False, False, 0)
+        header.pack_start(titles, False, False, 0)
+        outer.pack_start(header, False, False, 0)
+
+        mid = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=16)
+        mid.set_border_width(16)
+        outer.pack_start(mid, True, True, 0)
+
+        self.nav = CircularNav(self.goto_step)
+        mid.pack_start(self.nav, False, False, 0)
+
+        self.stack = Gtk.Stack()
+        self.stack.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
+        self.stack.set_transition_duration(300)
+        mid.pack_start(self.stack, True, True, 0)
+
+        self.stack.add_named(self._welcome_page(), "welcome")
+        self.stack.add_named(self._disk_page(), "disk")
+        self.stack.add_named(self._user_page(), "user")
+        self.stack.add_named(self._install_page(), "install")
+        self.stack.add_named(self._finish_page(), "finish")
+
+        bottom = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+        bottom.set_border_width(14)
+        self.back_btn = Gtk.Button(label="Back")
+        self.back_btn.connect("clicked", lambda b: self.goto_step(self.step - 1))
+        self.next_btn = Gtk.Button(label="Next")
+        self.next_btn.get_style_context().add_class("suggested-action")
+        self.next_btn.connect("clicked", self.on_next)
+        cancel = Gtk.Button(label="Cancel")
+        cancel.connect("clicked", lambda b: self.destroy())
+        bottom.pack_start(self.back_btn, False, False, 0)
+        bottom.pack_end(self.next_btn, False, False, 0)
+        bottom.pack_end(cancel, False, False, 0)
+        outer.pack_start(bottom, False, False, 0)
+
+        self._refresh_nav()
+
+    # ---------- pages ----------
+    def _welcome_page(self):
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        box.set_border_width(20)
+        try:
+            pix = GdkPixbuf.Pixbuf.new_from_file_at_scale(LOGO, 128, 128, True)
+            img = Gtk.Image.new_from_pixbuf(pix)
+            img.set_halign(Gtk.Align.CENTER)
+            box.pack_start(img, False, False, 0)
+        except Exception:
+            pass
+        title = Gtk.Label()
+        title.set_markup('<span size="xx-large" weight="bold">Welcome to Linuxium :)</span>')
+        title.set_halign(Gtk.Align.CENTER)
+        box.pack_start(title, False, False, 0)
+        info = Gtk.Label()
+        info.set_markup(
+            "This is the <b>Linuxium Experience</b> — a smooth, dark installer.\n"
+            "Click the circular buttons to move between steps.\n\n"
+            "• Windows apps: Wine + Winetricks are preinstalled\n"
+            "• VMware: Open VM Tools + vmwgfx 3D are ready\n"
+            "• Boot splash: Tetris blocks build Lynx the penguin"
+        )
+        info.set_halign(Gtk.Align.CENTER)
+        info.set_line_wrap(True)
+        box.pack_start(info, False, False, 0)
+        return box
+
+    def _disk_page(self):
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        box.set_border_width(20)
+        title = Gtk.Label()
+        title.set_markup('<span size="large" weight="bold">Choose a disk</span>')
+        title.set_halign(Gtk.Align.START)
+        box.pack_start(title, False, False, 0)
+        warn = Gtk.Label()
+        warn.set_markup('<span color="#f59e0b">This will erase the selected disk. Back up your files first!</span>')
+        warn.set_halign(Gtk.Align.START)
+        box.pack_start(warn, False, False, 0)
+        self.disk_list = Gtk.ListBox()
+        scrolled = Gtk.ScrolledWindow()
+        scrolled.add(self.disk_list)
+        scrolled.set_min_content_height(180)
+        box.pack_start(scrolled, True, True, 0)
+        self.disk_refresh = Gtk.Button(label="Refresh disks")
+        self.disk_refresh.connect("clicked", lambda b: self._fill_disks())
+        box.pack_start(self.disk_refresh, False, False, 0)
+        self.erase_check = Gtk.CheckButton(label="I understand this will erase the selected disk")
+        box.pack_start(self.erase_check, False, False, 0)
+        adv = Gtk.Button(label="Advanced partitioning (Calamares)")
+        adv.connect("clicked", self._launch_calamares)
+        box.pack_start(adv, False, False, 0)
+        self._fill_disks()
+        return box
+
+    def _fill_disks(self):
+        for child in list(self.disk_list.get_children()):
+            self.disk_list.remove(child)
+        try:
+            disks = list_disks()
+        except Exception:
+            disks = []
+        if not disks:
+            row = Gtk.Label(label="No disks found.")
+            self.disk_list.add(row)
+        for name, rest in disks:
+            row = Gtk.ListBoxRow()
+            label = Gtk.Label()
+            live_tag = " (live USB — cannot install here)" if is_live_disk(name) else ""
+            label.set_markup("<b>/dev/%s</b>  %s%s" % (name, rest, live_tag))
+            label.set_halign(Gtk.Align.START)
+            label.set_xalign(0)
+            row.add(label)
+            row.set_data("disk", name)
+            self.disk_list.add(row)
+        self.disk_list.show_all()
+
+    def _user_page(self):
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        box.set_border_width(20)
+        title = Gtk.Label()
+        title.set_markup('<span size="large" weight="bold">Create your account</span>')
+        title.set_halign(Gtk.Align.START)
+        box.pack_start(title, False, False, 0)
+        self.user_entry = Gtk.Entry()
+        self.user_entry.set_placeholder_text("Username (lowercase, e.g. playerz)")
+        box.pack_start(self.user_entry, False, False, 0)
+        self.name_entry = Gtk.Entry()
+        self.name_entry.set_placeholder_text("Full name")
+        box.pack_start(self.name_entry, False, False, 0)
+        self.pass_entry = Gtk.Entry()
+        self.pass_entry.set_placeholder_text("Password")
+        self.pass_entry.set_visibility(False)
+        box.pack_start(self.pass_entry, False, False, 0)
+        self.pass2_entry = Gtk.Entry()
+        self.pass2_entry.set_placeholder_text("Confirm password")
+        self.pass2_entry.set_visibility(False)
+        box.pack_start(self.pass2_entry, False, False, 0)
+        self.host_entry = Gtk.Entry()
+        self.host_entry.set_text("linuxium")
+        self.host_entry.set_placeholder_text("Computer name")
+        box.pack_start(self.host_entry, False, False, 0)
+        self.tz_combo = Gtk.ComboBoxText()
+        for tz in ["UTC", "America/Los_Angeles", "America/New_York", "Europe/London", "Europe/Berlin", "Asia/Tokyo", "Australia/Sydney"]:
+            self.tz_combo.append_text(tz)
+        self.tz_combo.set_active(0)
+        box.pack_start(self.tz_combo, False, False, 0)
+        return box
+
+    def _install_page(self):
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+        box.set_border_width(20)
+        title = Gtk.Label()
+        title.set_markup('<span size="large" weight="bold">Installing Linuxium…</span>')
+        title.set_halign(Gtk.Align.START)
+        box.pack_start(title, False, False, 0)
+        self.progress = Gtk.ProgressBar()
+        self.progress.set_show_text(True)
+        box.pack_start(self.progress, False, False, 0)
+        self.status_label = Gtk.Label(label="Ready.")
+        self.status_label.set_halign(Gtk.Align.START)
+        box.pack_start(self.status_label, False, False, 0)
+        self.log_view = Gtk.TextView()
+        self.log_view.set_editable(False)
+        self.log_view.set_wrap_mode(Gtk.WrapMode.WORD_CHAR)
+        scrolled = Gtk.ScrolledWindow()
+        scrolled.add(self.log_view)
+        scrolled.set_min_content_height(280)
+        box.pack_start(scrolled, True, True, 0)
+        return box
+
+    def _finish_page(self):
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        box.set_border_width(20)
+        try:
+            pix = GdkPixbuf.Pixbuf.new_from_file_at_scale(LOGO, 96, 96, True)
+            img = Gtk.Image.new_from_pixbuf(pix)
+            img.set_halign(Gtk.Align.CENTER)
+            box.pack_start(img, False, False, 0)
+        except Exception:
+            pass
+        title = Gtk.Label()
+        title.set_markup('<span size="xx-large" weight="bold">Linuxium is ready! :)</span>')
+        title.set_halign(Gtk.Align.CENTER)
+        box.pack_start(title, False, False, 0)
+        info = Gtk.Label(label="Installation complete. Reboot to start using Linuxium.")
+        info.set_halign(Gtk.Align.CENTER)
+        box.pack_start(info, False, False, 0)
+        reboot = Gtk.Button(label="Reboot now")
+        reboot.get_style_context().add_class("suggested-action")
+        reboot.connect("clicked", lambda b: subprocess.run(["systemctl", "reboot"]))
+        reboot.set_halign(Gtk.Align.CENTER)
+        box.pack_start(reboot, False, False, 0)
+        return box
+
+    # ---------- navigation ----------
+    def _refresh_nav(self):
+        self.nav.set_current(self.step)
+        names = ["welcome", "disk", "user", "install", "finish"]
+        self.stack.set_visible_child_name(names[self.step])
+        self.back_btn.set_sensitive(self.step > 0 and self.step != 3)
+        if self.step == 4:
+            self.next_btn.set_label("Close")
+        elif self.step == 3:
+            self.next_btn.set_label("Installing…")
+            self.next_btn.set_sensitive(False)
+        else:
+            self.next_btn.set_label("Next")
+            self.next_btn.set_sensitive(True)
+
+    def goto_step(self, idx):
+        if idx < 0 or idx >= len(STEPS):
+            return
+        if self.step == 3:
+            return
+        # Validate forward moves
+        if idx > self.step:
+            if self.step == 1 and not self._disk_valid():
+                self._error("Please select a disk and tick the erase confirmation.")
+                return
+            if self.step == 2 and not self._user_valid():
+                self._error("Please check your username and passwords.")
+                return
+        self.step = idx
+        self._refresh_nav()
+
+    def on_next(self, _btn):
+        if self.step == 4:
+            self.destroy()
+            return
+        if self.step == 2:
+            # Start install
+            self.goto_step(3)
+            self._start_install()
+            return
+        self.goto_step(self.step + 1)
+
+    def _disk_valid(self):
+        row = self.disk_list.get_selected_row()
+        if row is None:
+            return False
+        name = row.get_data("disk")
+        if not name or is_live_disk(name):
+            return False
+        if not self.erase_check.get_active():
+            return False
+        self.selected_disk = name
+        return True
+
+    def _user_valid(self):
+        user = self.user_entry.get_text().strip()
+        pw = self.pass_entry.get_text()
+        pw2 = self.pass2_entry.get_text()
+        if not re.match(r"^[a-z_][a-z0-9_-]*$", user):
+            return False
+        if len(pw) < 4 or pw != pw2:
+            return False
+        return True
+
+    def _error(self, msg):
+        dlg = Gtk.MessageDialog(self, Gtk.DialogFlags.MODAL, Gtk.MessageType.ERROR, Gtk.ButtonsType.OK, msg)
+        dlg.run()
+        dlg.destroy()
+
+    def _launch_calamares(self, _btn):
+        try:
+            subprocess.Popen(["/usr/bin/install-linuxium", "--calamares"],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                             start_new_session=True)
+        except OSError:
+            pass
+
+    # ---------- install ----------
+    def _log(self, msg):
+        def _add():
+            buf = self.log_view.get_buffer()
+            buf.insert(buf.get_end_iter(), msg + "\n")
+            return False
+        GLib.idle_add(_add)
+
+    def _progress(self, frac, text):
+        def _set():
+            self.progress.set_fraction(max(0.0, min(1.0, frac)))
+            self.progress.set_text(text)
+            self.status_label.set_text(text)
+            return False
+        GLib.idle_add(_set)
+
+    def _start_install(self):
+        self.cancelled = False
+        self.install_thread = threading.Thread(target=self._do_install, daemon=True)
+        self.install_thread.start()
+
+    def _do_install(self):
+        try:
+            disk = self.selected_disk
+            user = self.user_entry.get_text().strip()
+            pw = self.pass_entry.get_text()
+            host = self.host_entry.get_text().strip() or "linuxium"
+            tz = self.tz_combo.get_active_text() or "UTC"
+            dev = "/dev/" + disk
+            efi = is_efi()
+            log = self._log
+            prog = self._progress
+
+            prog(0.02, "Preparing disk %s…" % dev)
+            log("Linuxium Experience install to %s (EFI=%s)" % (dev, efi))
+            # Unmount any mounted partitions on target
+            try:
+                out = subprocess.run(["lsblk", "-n", "-o", "MOUNTPOINT", dev],
+                                     stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True).stdout
+                for mp in out.split():
+                    if mp and mp != TARGET:
+                        run(["umount", "-R", mp], log)
+            except Exception:
+                pass
+            run(["umount", "-R", TARGET], log) if os.path.isdir(TARGET) else None
+
+            prog(0.08, "Partitioning…")
+            if efi:
+                run(["parted", "-s", dev, "mklabel", "gpt"], log)
+                run(["parted", "-s", dev, "mkpart", "ESP", "fat32", "1MiB", "513MiB"], log)
+                run(["parted", "-s", dev, "set", "1", "esp", "on"], log)
+                run(["parted", "-s", dev, "mkpart", "ROOT", "ext4", "513MiB", "100%"], log)
+                part_efi = dev + ("p1" if disk.startswith("nvme") or disk.startswith("mmcblk") else "1")
+                part_root = dev + ("p2" if disk.startswith("nvme") or disk.startswith("mmcblk") else "2")
+            else:
+                run(["parted", "-s", dev, "mklabel", "msdos"], log)
+                run(["parted", "-s", dev, "mkpart", "primary", "ext4", "1MiB", "100%"], log)
+                run(["parted", "-s", dev, "set", "1", "boot", "on"], log)
+                part_efi = None
+                part_root = dev + ("p1" if disk.startswith("nvme") or disk.startswith("mmcblk") else "1")
+
+            prog(0.15, "Formatting…")
+            if efi:
+                run(["mkfs.fat", "-F", "32", "-n", "LINUXIUM_EFI", part_efi], log)
+            run(["mkfs.ext4", "-L", "LINUXIUM", "-F", part_root], log)
+
+            prog(0.22, "Mounting…")
+            os.makedirs(TARGET, exist_ok=True)
+            run(["mount", part_root, TARGET], log)
+            if efi:
+                os.makedirs(os.path.join(TARGET, "boot", "efi"), exist_ok=True)
+                run(["mount", part_efi, os.path.join(TARGET, "boot", "efi")], log)
+
+            prog(0.35, "Copying system files…")
+            squash = None
+            for cand in ["/run/live/medium/live/filesystem.squashfs", "/live/filesystem.squashfs"]:
+                if os.path.isfile(cand):
+                    squash = cand
+                    break
+            if squash:
+                run(["unsquashfs", "-f", "-d", TARGET, squash], log)
+            else:
+                run(["rsync", "-aHAX", "--exclude=/proc", "--exclude=/sys", "--exclude=/dev",
+                     "--exclude=/run", "--exclude=/mnt", "--exclude=/media", "--exclude=/tmp",
+                     "--exclude=/var/tmp", "/", TARGET + "/"], log)
+            # Ensure kernel/initrd present (they live in the squashfs, but copy if missing)
+            for k in os.listdir("/boot"):
+                if k.startswith("vmlinuz-") or k.startswith("initrd.img-"):
+                    src = os.path.join("/boot", k)
+                    dst = os.path.join(TARGET, "boot", k)
+                    if not os.path.exists(dst):
+                        run(["cp", "-a", src, dst], log)
+
+            prog(0.60, "Writing fstab…")
+            def uuid_of(part):
+                out = subprocess.run(["blkid", "-s", "UUID", "-o", "value", part],
+                                     stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True).stdout.strip()
+                return out
+            root_uuid = uuid_of(part_root)
+            lines = ["UUID=%s / ext4 defaults,errors=remount-ro 0 1" % root_uuid]
+            if efi:
+                efi_uuid = uuid_of(part_efi)
+                lines.append("UUID=%s /boot/efi vfat umask=0077 0 1" % efi_uuid)
+            with open(os.path.join(TARGET, "etc", "fstab"), "w") as f:
+                f.write("\n".join(lines) + "\n")
+
+            prog(0.70, "Installing bootloader…")
+            if efi:
+                run(["grub-install", "--target=x86_64-efi",
+                     "--efi-directory=" + os.path.join(TARGET, "boot", "efi"),
+                     "--bootloader-id=debian", "--recheck"], log)
+            else:
+                run(["grub-install", "--target=i386-pc",
+                     "--boot-directory=" + os.path.join(TARGET, "boot"), dev], log)
+            run(["chroot", TARGET, "update-grub"], log)
+            run(["chroot", TARGET, "update-initramfs", "-u", "-k", "all"], log)
+
+            prog(0.82, "Creating user…")
+            run(["chroot", TARGET, "useradd", "-m", "-s", "/bin/bash", user], log)
+            proc = subprocess.run(["chroot", TARGET, "chpasswd"],
+                                  input="%s:%s\n" % (user, pw),
+                                  stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+            if proc.returncode != 0:
+                raise RuntimeError("chpasswd failed: " + proc.stdout)
+            with open(os.path.join(TARGET, "etc", "hostname"), "w") as f:
+                f.write(host + "\n")
+            with open(os.path.join(TARGET, "etc", "hosts"), "w") as f:
+                f.write("127.0.0.1 localhost\n127.0.1.1 %s\n::1 localhost ip6-localhost ip6-loopback\n" % host)
+            try:
+                os.symlink("/usr/share/zoneinfo/" + tz, os.path.join(TARGET, "etc", "localtime"))
+            except FileExistsError:
+                pass
+            with open(os.path.join(TARGET, "etc", "timezone"), "w") as f:
+                f.write(tz + "\n")
+
+            prog(0.92, "Cleaning live-only files…")
+            for p in [
+                "etc/skel/Desktop/install-linuxium.desktop",
+                "etc/skel/Desktop/linuxium-experience.desktop",
+                "usr/share/applications/install-linuxium.desktop",
+                "usr/share/applications/linuxium-experience.desktop",
+                "usr/bin/install-linuxium",
+                "usr/bin/linuxium-experience",
+                "etc/xdg/autostart/linuxium-welcome.desktop",
+            ]:
+                try:
+                    os.remove(os.path.join(TARGET, p))
+                except OSError:
+                    pass
+            import shutil
+            shutil.rmtree(os.path.join(TARGET, "usr", "lib", "linuxium"), ignore_errors=True)
+            try:
+                for home in os.listdir(os.path.join(TARGET, "home")):
+                    for desk in ["install-linuxium.desktop", "linuxium-experience.desktop"]:
+                        try:
+                            os.remove(os.path.join(TARGET, "home", home, "Desktop", desk))
+                        except OSError:
+                            pass
+            except OSError:
+                pass
+
+            prog(0.98, "Syncing…")
+            run(["sync"], log)
+            run(["umount", "-R", TARGET], log)
+
+            prog(1.0, "Done!")
+            log("Install complete.")
+            GLib.idle_add(lambda: self.goto_step(4))
+        except Exception as exc:
+            self._log("ERROR: %s" % exc)
+            GLib.idle_add(lambda: self._error("Install failed:\n%s" % exc))
+
+
+def main():
+    app = Experience()
+    app.show_all()
+    Gtk.main()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+PYEOF
+chmod +x "$LIB_LINUXIUM/linuxium-experience"
+
+cat > "$BIN_INC/linuxium-experience" <<'EOF'
 #!/bin/sh
+# Linuxium Experience launcher: run the custom installer as root so it can
+# partition/mount/copy without per-command sudo prompts. Mirrors the old
+# Calamares wrapper: X11 root access + stale live /etc/fstab handling.
 export QT_AUTO_SCREEN_SCALE_FACTOR=1
 
-# In the live session, 0040-sudo grants passwordless sudo, whereas
-# Bookworm's live-config + polkitd can prompt pkexec for the hidden live
-# password (Debian bug #1037295). When passwordless sudo is available,
-# handle X11 root access and stale live /etc/fstab directly and launch
-# Calamares via sudo so the installer opens immediately without a lock.
 if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
   if command -v xhost >/dev/null 2>&1; then
     xhost +si:localuser:root >/dev/null 2>&1 || true
   fi
   _FSTAB_MOVED=0
-  if [ -e /etc/fstab ] && [ ! -e /etc/fstab.orig.calamares ]; then
-    if sudo -n mv /etc/fstab /etc/fstab.orig.calamares 2>/dev/null; then
+  if [ -e /etc/fstab ] && [ ! -e /etc/fstab.orig.linuxium ]; then
+    if sudo -n mv /etc/fstab /etc/fstab.orig.linuxium 2>/dev/null; then
       _FSTAB_MOVED=1
     fi
   fi
   restore_live_env() {
-    if [ "$_FSTAB_MOVED" = "1" ] && [ -e /etc/fstab.orig.calamares ] && [ ! -e /etc/fstab ]; then
-      sudo -n mv /etc/fstab.orig.calamares /etc/fstab 2>/dev/null || true
+    if [ "$_FSTAB_MOVED" = "1" ] && [ -e /etc/fstab.orig.linuxium ] && [ ! -e /etc/fstab ]; then
+      sudo -n mv /etc/fstab.orig.linuxium /etc/fstab 2>/dev/null || true
     fi
     if command -v xhost >/dev/null 2>&1; then
       xhost -si:localuser:root >/dev/null 2>&1 || true
     fi
   }
   trap restore_live_env EXIT INT TERM
-  _CAL_RC=0
+  _RC=0
   sudo -n env \
     DISPLAY="${DISPLAY:-:0}" \
     XAUTHORITY="${XAUTHORITY:-$HOME/.Xauthority}" \
     LANG="${LANG:-en_US.UTF-8}" \
     QT_AUTO_SCREEN_SCALE_FACTOR=1 \
-    calamares "$@" || _CAL_RC=$?
+    /usr/lib/linuxium/linuxium-experience "$@" || _RC=$?
   trap - EXIT INT TERM
   restore_live_env
-  exit "$_CAL_RC"
+  exit "$_RC"
 fi
+exec pkexec /usr/lib/linuxium/linuxium-experience "$@"
+EOF
+chmod +x "$BIN_INC/linuxium-experience"
 
-for _WRAPPER in /usr/bin/install-debian /usr/bin/calamares-install-debian; do
-  if [ -x "$_WRAPPER" ]; then
-    exec "$_WRAPPER" "$@"
+cat > "$BIN_INC/install-linuxium" <<'EOF'
+#!/bin/sh
+# Compatibility launcher: "Install Linuxium" now opens Linuxium Experience.
+# Pass --calamares to open the Calamares fallback instead.
+if [ "${1:-}" = "--calamares" ]; then
+  shift
+  export QT_AUTO_SCREEN_SCALE_FACTOR=1
+  if command -v sudo >/dev/null 2>&1 && sudo -n true 2>/dev/null; then
+    if command -v xhost >/dev/null 2>&1; then
+      xhost +si:localuser:root >/dev/null 2>&1 || true
+    fi
+    _FSTAB_MOVED=0
+    if [ -e /etc/fstab ] && [ ! -e /etc/fstab.orig.calamares ]; then
+      if sudo -n mv /etc/fstab /etc/fstab.orig.calamares 2>/dev/null; then
+        _FSTAB_MOVED=1
+      fi
+    fi
+    restore_live_env() {
+      if [ "$_FSTAB_MOVED" = "1" ] && [ -e /etc/fstab.orig.calamares ] && [ ! -e /etc/fstab ]; then
+        sudo -n mv /etc/fstab.orig.calamares /etc/fstab 2>/dev/null || true
+      fi
+      if command -v xhost >/dev/null 2>&1; then
+        xhost -si:localuser:root >/dev/null 2>&1 || true
+      fi
+    }
+    trap restore_live_env EXIT INT TERM
+    _CAL_RC=0
+    sudo -n env \
+      DISPLAY="${DISPLAY:-:0}" \
+      XAUTHORITY="${XAUTHORITY:-$HOME/.Xauthority}" \
+      LANG="${LANG:-en_US.UTF-8}" \
+      QT_AUTO_SCREEN_SCALE_FACTOR=1 \
+      calamares "$@" || _CAL_RC=$?
+    trap - EXIT INT TERM
+    restore_live_env
+    exit "$_CAL_RC"
   fi
-done
-exec pkexec calamares "$@"
+  for _WRAPPER in /usr/bin/install-debian /usr/bin/calamares-install-debian; do
+    if [ -x "$_WRAPPER" ]; then
+      exec "$_WRAPPER" "$@"
+    fi
+  done
+  exec pkexec calamares "$@"
+fi
+exec /usr/bin/linuxium-experience "$@"
 EOF
 chmod +x "$BIN_INC/install-linuxium"
+
+cat > "$APP_INC/linuxium-experience.desktop" <<'EOF'
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Linuxium Experience
+GenericName=Linuxium Installer
+Comment=Install Linuxium to your computer with the Linuxium Experience installer
+Keywords=linuxium;install;installer;experience;system;
+Exec=/usr/bin/linuxium-experience
+Icon=linuxium
+Terminal=false
+Categories=System;
+StartupWMClass=linuxium-experience
+StartupNotify=true
+EOF
+chmod 0755 "$APP_INC/linuxium-experience.desktop"
 
 cat > "$APP_INC/install-linuxium.desktop" <<'EOF'
 [Desktop Entry]
 Type=Application
 Version=1.0
-Name=Install Linuxium
-GenericName=Calamares Installer
-Comment=Install Linuxium to your computer with the Calamares installer
-Keywords=calamares;system;install;linuxium;installer;
-Exec=/usr/bin/install-linuxium
-Icon=calamares
+Name=Linuxium Experience
+GenericName=Linuxium Installer
+Comment=Install Linuxium to your computer with the Linuxium Experience installer
+Keywords=linuxium;install;installer;experience;system;calamares;
+Exec=/usr/bin/linuxium-experience
+Icon=linuxium
 Terminal=false
-Categories=Qt;System;
-StartupWMClass=calamares
+Categories=System;
+StartupWMClass=linuxium-experience
 StartupNotify=true
 EOF
 chmod 0755 "$APP_INC/install-linuxium.desktop"
@@ -1237,8 +2142,19 @@ Welcome to Linuxium :) luv from playerz
 * Live user: **linuxium** (automatic login and passwordless sudo; if a
   text-console or manual screen-lock prompt asks for its password, it is
   **live**)
-* Installer: **Install Linuxium** (Calamares) right on the desktop or in
-  the menu, or the classic Debian installer from the ISO boot menu.
+* Installer: **Linuxium Experience** (dark custom installer with circular
+  step buttons) right on the desktop or in the menu. Calamares remains
+  available as an advanced fallback (Install Linuxium --calamares), and
+  the classic Debian installer remains in the ISO boot menu.
+* Windows apps: **Wine 8.0 + Winetricks** preinstalled. Double-click .exe
+  files to run them with Wine. For 32-bit Windows apps, enable i386:
+  \`sudo dpkg --add-architecture i386 && sudo apt update && sudo apt install wine32 libwine:i386\`
+  then run \`winetricks vcrun2019\` / \`winetricks corefonts\` as needed.
+* VMware: **Open VM Tools + vmwgfx 3D** preinstalled. Use SVGA graphics
+  with 3D acceleration ON in VMware for the full accelerated Cinnamon
+  session (Linuxium auto-detects VMware and keeps hardware 3D). Clipboard,
+  drag-and-drop and display resize work via open-vm-tools-desktop.
+* Boot splash: Tetris blocks build Lynx the penguin (dark theme).
 * Wallpapers: Settings > Backgrounds (credits in
   /usr/share/doc/linuxium-wallpapers/CREDITS.txt)
 
@@ -1258,7 +2174,7 @@ framebuffer fallback drivers. The boot menu's classic *Graphical
 installer* is Debian Installer, not Calamares; on VirtualBox in EFI
 mode its GTK frontend hits Debian bug #1036310, so set System ->
 Acceleration -> Paravirtualization Interface to None (or Legacy) while
-using that entry, or simply boot Live and use Install Linuxium.
+using that entry, or simply boot Live and use Linuxium Experience.
 EOF
 
 # 5j. OS theme: CBlack (by cloweling, LGPL-3.0; based on Linux Mint's
@@ -3047,7 +3963,7 @@ has_hardware_3d_gpu()
 		drv="$(readlink "$card/device/driver" 2>/dev/null || true)"
 		drv="${drv##*/}"
 		case "$drv" in
-			i915|xe|amdgpu|radeon|nouveau|nvidia|nvidia-drm|vc4|v3d|panfrost|lima|etnaviv|msm|tegra)
+			i915|xe|amdgpu|radeon|nouveau|nvidia|nvidia-drm|vc4|v3d|panfrost|lima|etnaviv|msm|tegra|vmwgfx)
 				return 0
 				;;
 			virtio_gpu|virtio-pci)
@@ -3449,7 +4365,7 @@ POLKITEOF
 		then
 			mkdir -p "${_LIVE_HOME}/Desktop"
 			chmod 0755 "${_LIVE_HOME}/Desktop" 2>/dev/null || true
-			for _DESK_APP in install-linuxium.desktop nemo.desktop firefox-esr.desktop
+			for _DESK_APP in linuxium-experience.desktop install-linuxium.desktop nemo.desktop firefox-esr.desktop
 			do
 				if [ -f "/usr/share/applications/${_DESK_APP}" ]
 				then
@@ -3621,18 +4537,27 @@ if [ -f /usr/sbin/sources-final ]; then
   # shellcheck disable=SC2016 # $CHROOT expands at install time inside sources-final
   sed -i '/^exit 0/i \
 if [ -n "${CHROOT:-}" ] \&\& [ "$CHROOT" != "/" ] \&\& [ -d "$CHROOT" ]; then\
-  rm -f "$CHROOT/etc/skel/Desktop/install-linuxium.desktop" \\\
-        "$CHROOT/usr/share/applications/install-linuxium.desktop" \\\
-        "$CHROOT/usr/bin/install-linuxium" \\\
+  rm -f "$CHROOT/etc/skel/Desktop/install-linuxium.desktop" \
+        "$CHROOT/etc/skel/Desktop/linuxium-experience.desktop" \\\
+        "$CHROOT/usr/share/applications/install-linuxium.desktop" \
+        "$CHROOT/usr/share/applications/linuxium-experience.desktop" \\\
+        "$CHROOT/usr/bin/install-linuxium" \
+        "$CHROOT/usr/bin/linuxium-experience" \\\
         "$CHROOT/etc/xdg/autostart/linuxium-welcome.desktop"\
   rm -rf "$CHROOT/usr/lib/linuxium"\
-  for _u_desk in "$CHROOT"/home/*/Desktop/install-linuxium.desktop; do\
+  for _u_desk in "$CHROOT"/home/*/Desktop/install-linuxium.desktop "$CHROOT"/home/*/Desktop/linuxium-experience.desktop; do\
     [ -e "$_u_desk" ] \&\& rm -f "$_u_desk"\
   done\
 fi' /usr/sbin/sources-final
 fi
 
-# We ship our own "Install Linuxium" launcher + one-time welcome popup, so
+# VMware guest services: enable Open VM Tools (ConditionVirtualization=vmware
+# keeps them inert on bare metal / VirtualBox / QEMU).
+if command -v systemctl >/dev/null 2>&1; then
+  systemctl enable open-vm-tools.service open-vm-tools-desktop.service 2>/dev/null || true
+fi
+
+# We ship our own "Linuxium Experience" launcher + one-time welcome popup, so
 # hide Debian's unbranded "Install Debian" menu entry and desktop-icon autostart.
 for deb_inst_desktop in \
   /usr/share/applications/install-debian.desktop \
@@ -3646,11 +4571,11 @@ if [ -f /etc/xdg/autostart/calamares-desktop-icon.desktop ]; then
 fi
 
 # Desktop launchers baked directly into /etc/skel/Desktop (0755, trusted by
-# Nemo out of the box): Install Linuxium, File Browser (Nemo) and Firefox.
+# Nemo out of the box): Linuxium Experience, File Browser (Nemo) and Firefox.
 # Calamares's sources-final step above strips install-linuxium.desktop from
 # the installed target disk so only live boots show the installer shortcut.
 mkdir -p /etc/skel/Desktop
-for skel_app in install-linuxium.desktop nemo.desktop firefox-esr.desktop; do
+for skel_app in linuxium-experience.desktop install-linuxium.desktop nemo.desktop firefox-esr.desktop; do
   if [ -f "/usr/share/applications/$skel_app" ]; then
     cp -f "/usr/share/applications/$skel_app" "/etc/skel/Desktop/$skel_app"
     chmod 0755 "/etc/skel/Desktop/$skel_app"
@@ -3888,6 +4813,9 @@ if [ -f binary/live/filesystem.squashfs ]; then
   ROOTFS_LISTING="$("${SUDO[@]}" unsquashfs -ll binary/live/filesystem.squashfs 2>/dev/null || true)"
   for root_part in \
     "/sbin/init" "/usr/sbin/lightdm" "/usr/bin/calamares" "/usr/bin/gimp" \
+    "/usr/bin/wine" "/usr/bin/wine64" "/usr/bin/winetricks" \
+    "/usr/bin/linuxium-experience" "/usr/bin/install-linuxium" \
+    "/usr/lib/linuxium/linuxium-experience" \
     "/usr/share/xsessions/cinnamon.desktop" \
     "/usr/share/xsessions/cinnamon2d.desktop" \
     "/live/config/0190-linuxium-graphics" \
@@ -3906,8 +4834,13 @@ if [ -f binary/live/filesystem.squashfs ]; then
     "/usr/share/initramfs-tools/hooks/cryptroot" \
     "/usr/share/plymouth/themes/linuxium/linuxium.plymouth" \
     "/usr/share/plymouth/themes/linuxium/linuxium.script" \
+    "/usr/share/plymouth/themes/linuxium/logo.png" \
+    "/usr/share/plymouth/themes/linuxium/well.png" \
+    "/usr/share/plymouth/themes/linuxium/block-0.png" \
+    "/usr/share/plymouth/themes/linuxium/block-6.png" \
     "/usr/share/plymouth/themes/linuxium/progress-track.png" \
     "/usr/share/plymouth/themes/linuxium/progress-bar.png" \
+    "/etc/initramfs-tools/modules" \
     "/usr/share/linuxium/panel-icon.png" \
     "/usr/share/icons/Papirus-Dark/index.theme" \
     "/usr/share/cinnamon/applets/search-bar@linuxium/applet.js" \
@@ -3923,6 +4856,8 @@ if [ -f binary/live/filesystem.squashfs ]; then
     "/usr/share/cinnamon-background-properties/linuxium.xml" \
     "/lib/linuxium/welcome-popup" \
     "/lib/linuxium/welcome-autostart" \
+    "/usr/share/applications/linuxium-experience.desktop" \
+    "/etc/skel/Desktop/linuxium-experience.desktop" \
     "/etc/skel/Desktop/install-linuxium.desktop" \
     "/etc/skel/Desktop/nemo.desktop" \
     "/etc/skel/Desktop/firefox-esr.desktop" \
