@@ -40,6 +40,16 @@ set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 
 LINUXIUM_VERSION="1.1"
+# Outer .iso.xz compression preset (0..9). Level 6 is xz's sweet spot:
+# within ~1% of -9 ratio while needing ~94 MiB/thread instead of 674 MiB/thread.
+LINUXIUM_XZ_LEVEL="${LINUXIUM_XZ_LEVEL:-6}"
+case "$LINUXIUM_XZ_LEVEL" in
+  [0-9]) ;;
+  *)
+    echo "ERROR: LINUXIUM_XZ_LEVEL must be a single digit 0..9 (got '$LINUXIUM_XZ_LEVEL')" >&2
+    exit 1
+    ;;
+esac
 # Resolve the script's own directory first: the default images, the extra
 # wallpapers folder, the download cache and the build tree all live next
 # to the script, NOT in whatever directory the caller happens to be in.
@@ -110,7 +120,7 @@ cd "$SCRIPT_DIR"
 # also name cpio so the requirement is obvious and guaranteed.
 "${SUDO[@]}" apt-get update
 "${SUDO[@]}" apt-get install -y --install-recommends \
-  live-build debootstrap cpio squashfs-tools xorriso apt-utils \
+  live-build debootstrap cpio squashfs-tools xz-utils xorriso apt-utils \
   isolinux syslinux-common grub-pc-bin grub-efi-amd64-bin mtools dosfstools \
   imagemagick curl ca-certificates librsvg2-bin sbsigntool
 
@@ -4975,20 +4985,35 @@ fi
 
 sha256sum "$ISO" > "${ISO}.sha256"
 
-# 12. Reclaim intermediate build trees. The ISO itself is already compressed
-#     (SquashFS XZ with 1 MiB BCJ blocks + XZ initramfs + slimmed packages),
-#     so no outer .iso.xz copy is produced — one bootable ISO only.
+# 12. Reclaim intermediate build trees and compress the verified ISO into a
+#     smaller .iso.xz archive (balenaEtcher and Rufus both flash .iso.xz
+#     directly without manual extraction, while raw .iso stays available for
+#     QEMU/VirtualBox/dd).
 "${SUDO[@]}" rm -rf chroot cache binary
 
+COMPRESSED_ISO="${ISO}.xz"
+echo "Compressing ${ISO#./} -> ${COMPRESSED_ISO#./} (xz -T0 -${LINUXIUM_XZ_LEVEL})..."
+xz -k -f -T0 "-${LINUXIUM_XZ_LEVEL}" "$ISO"
+if [ ! -s "$COMPRESSED_ISO" ]; then
+  echo "ERROR: compressed image $COMPRESSED_ISO was not created" >&2
+  exit 1
+fi
+sha256sum "$COMPRESSED_ISO" > "${COMPRESSED_ISO}.sha256"
+
 ISO_BYTES="$(stat -c %s "$ISO")"
+XZ_BYTES="$(stat -c %s "$COMPRESSED_ISO")"
 SQUASHFS_MIB="$(awk -v b="${SQUASHFS_BYTES:-0}" 'BEGIN { printf "%.1f MiB", b / 1048576 }')"
 ISO_MIB="$(awk -v b="$ISO_BYTES" 'BEGIN { printf "%.1f MiB", b / 1048576 }')"
+XZ_MIB="$(awk -v b="$XZ_BYTES" 'BEGIN { printf "%.1f MiB", b / 1048576 }')"
+SAVED_PCT="$(awk -v raw="$ISO_BYTES" -v cmp="$XZ_BYTES" 'BEGIN { if (raw > 0) printf "%.1f%%", (1 - cmp / raw) * 100; else print "0.0%" }')"
 
 echo
 echo "Done."
 echo "  Live SquashFS:      ${SQUASHFS_MIB}"
 echo "  Bootable ISO:       $(pwd)/${ISO#./} (${ISO_MIB})"
 echo "  ISO SHA-256:        $(pwd)/${ISO#./}.sha256"
+echo "  Compressed ISO:     $(pwd)/${COMPRESSED_ISO#./} (${XZ_MIB}, ${SAVED_PCT} smaller)"
+echo "  Compressed SHA-256: $(pwd)/${COMPRESSED_ISO#./}.sha256"
 echo "Test it with:"
 echo "  BIOS/MBR:  qemu-system-x86_64 -m 4096 -enable-kvm -cdrom ${ISO#./}"
 echo "  UEFI+SB:   qemu-system-x86_64 -m 4096 -enable-kvm -machine q35 \\"
