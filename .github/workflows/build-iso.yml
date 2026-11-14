@@ -73,24 +73,18 @@ jobs:
           (
             cd linuxium-build
             sha256sum -c ./*.iso.sha256
-            sha256sum -c ./*.iso.xz.sha256
           )
           shopt -s nullglob
           isos=(linuxium-build/*.iso)
-          xzs=(linuxium-build/*.iso.xz)
-          if [ "${#isos[@]}" -eq 1 ] && [ "${#xzs[@]}" -eq 1 ]; then
+          if [ "${#isos[@]}" -eq 1 ]; then
             iso_bytes="$(stat -c %s "${isos[0]}")"
-            xz_bytes="$(stat -c %s "${xzs[0]}")"
             iso_mib="$(awk -v b="$iso_bytes" 'BEGIN { printf "%.1f MiB", b / 1048576 }')"
-            xz_mib="$(awk -v b="$xz_bytes" 'BEGIN { printf "%.1f MiB", b / 1048576 }')"
-            saved="$(awk -v raw="$iso_bytes" -v cmp="$xz_bytes" 'BEGIN { if (raw > 0) printf "%.1f%%", (1 - cmp / raw) * 100; else print "0.0%" }')"
             {
               echo "### Linuxium Build Size Summary"
               echo ""
               echo "| Artifact | File | Size |"
               echo "| --- | --- | --- |"
               echo "| Bootable ISO (\`linuxium-iso\`) | \`$(basename "${isos[0]}")\` | ${iso_mib} |"
-              echo "| Compressed ISO (\`linuxium-iso-compressed\`) | \`$(basename "${xzs[0]}")\` | **${xz_mib}** (${saved} smaller) |"
             } >> "$GITHUB_STEP_SUMMARY"
           fi
 
@@ -102,17 +96,6 @@ jobs:
             linuxium-build/*.iso
             linuxium-build/*.iso.sha256
           compression-level: 9
-          if-no-files-found: error
-          retention-days: 14
-
-      - name: Upload compressed ISO (.iso.xz)
-        uses: actions/upload-artifact@v7
-        with:
-          name: linuxium-iso-compressed
-          path: |
-            linuxium-build/*.iso.xz
-            linuxium-build/*.iso.xz.sha256
-          compression-level: 0
           if-no-files-found: error
           retention-days: 14
 
@@ -131,17 +114,10 @@ jobs:
           set -euo pipefail
           mkdir -p release-assets
           cp linuxium-build/*.iso.sha256 release-assets/
-          cp linuxium-build/*.iso.xz.sha256 release-assets/
-          # The artifacts above are already uploaded; free any remaining build
+          # The artifact above is already uploaded; free any remaining build
           # trees before copying/splitting so this step cannot run the runner dry.
           sudo rm -rf linuxium-build/chroot linuxium-build/cache linuxium-build/binary
           limit=$((1900 * 1024 * 1024))
-          for xz_iso in linuxium-build/*.iso.xz; do
-            xz_size="$(stat -c %s "$xz_iso")"
-            if [ "$xz_size" -le "$limit" ]; then
-              cp "$xz_iso" release-assets/
-            fi
-          done
           for iso in linuxium-build/*.iso; do
             base="$(basename "$iso")"
             size="$(stat -c %s "$iso")"
