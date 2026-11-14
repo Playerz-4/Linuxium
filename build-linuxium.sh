@@ -404,7 +404,7 @@ xdg-utils
 # VMware: open-vm-tools (vmtoolsd daemon, time sync, shared folders,
 # power ops) + open-vm-tools-desktop (clipboard, drag-and-drop, display
 # resize for graphical guests) + xserver-xorg-video-vmware (legacy
-# SVGA) + vmwgfx KMS (modern SVGA 3D via Mesa). libdrm/libgbm1 are
+# SVGA) + vmwgfx KMS (modern SVGA 3D via Mesa). libdrm2/libgbm1 are
 # named explicitly so vmwgfx never goes missing. The vmwgfx kernel
 # modules are also baked into the initramfs via
 # /etc/initramfs-tools/modules (section 3b).
@@ -412,7 +412,7 @@ qemu-guest-agent
 spice-vdagent
 open-vm-tools
 open-vm-tools-desktop
-libdrm
+libdrm2
 libgbm1
 
 # Branding
