@@ -57,7 +57,7 @@ jobs:
         run: |
           # The defaults in build-linuxium.sh must be files in this repo,
           # or a no-argument local build dies on the file check.
-          for f in wallpaper.png lynx.png grub-bg.png; do
+          for f in wallpaper.png lynx.png grub-bg.png intro.png; do
             test -f "$f" || { echo "ERROR: default image $f missing from repo" >&2; exit 1; }
           done
           # Same for the vendored CBlack theme (themes/CBlack): the build

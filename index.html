@@ -4,9 +4,9 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Linuxium: Debian with the Cinnamon desktop</title>
-<meta name="description" content="Linuxium is a free Linux distribution built on Debian 12 with the Cinnamon desktop.">
-<meta name="theme-color" content="#f7f7f4">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🐧</text></svg>">
+<meta name="description" content="Linuxium is a free Linux distribution built on Debian 12 with the Cinnamon desktop. Smooth, dark, and ready for Windows apps and VMware.">
+<meta name="theme-color" content="#050508">
+<link rel="icon" href="lynx.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@600;700&family=IBM+Plex+Mono&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet">
@@ -17,7 +17,9 @@
 <div class="wrap">
 
   <header class="top">
-    <a class="brand" href="index.html">Linuxium</a>
+    <a class="brand" href="index.html" aria-label="Linuxium home">
+      <img src="linuxium-wordmark.png" alt="Linuxium" width="180" height="65">
+    </a>
     <nav aria-label="Main">
       <a href="#get">Get it</a>
       <a href="#community">Discord</a>
@@ -29,42 +31,73 @@
   <main id="main">
     <div class="hero">
       <span class="eyebrow">Debian 12 · Cinnamon · Free and open source</span>
-      <h1>Linux with a desktop you already know.</h1>
-      <p class="lead">Linuxium is Debian 12 with the Cinnamon desktop, a clean dark look, and the software most people need on day one. Boot it from a USB stick to try it, or install it.</p>
+      <img class="hero-wordmark" src="linuxium-wordmark.png" alt="Linuxium — Linux with a desktop you already know" width="560" height="204">
+      <p class="lead">Linuxium is Debian 12 with the Cinnamon desktop, a clean dark look, and the software most people need on day one. Boot it from a USB stick to try it, or install it with the smooth Linuxium Experience installer.</p>
       <div class="actions">
         <a class="btn main" href="https://github.com/playerz-4/linuxium/releases">Download the ISO</a>
         <a class="btn alt" href="https://github.com/playerz-4/linuxium">Read the source</a>
       </div>
       <ul class="chips">
         <li>Live USB — try before you install</li>
-        <li>Calamares installer</li>
+        <li>Linuxium Experience installer</li>
+        <li>Wine for Windows apps</li>
+        <li>VMware 3D ready</li>
+        <li>Tetris boot splash</li>
         <li>UEFI Secure Boot</li>
-        <li>64-bit PCs · 4 GB RAM recommended</li>
       </ul>
     </div>
 
-    <div class="desk" role="img" aria-label="Illustration of the Linuxium desktop: a terminal showing the system release file and a file manager over the Tux wallpaper">
-      <div class="win term">
-        <div class="tb">Terminal</div>
-<pre><span class="p">linuxium@linuxium:~$</span> cat /etc/os-release
-PRETTY_NAME="Linuxium 1.1"
-NAME="Linuxium"
-VERSION_ID="1.1"
-VERSION="1.1 (Playerz)"
-VERSION_CODENAME=bookworm
-ID=debian
-ID_LIKE=debian
-<span class="p">linuxium@linuxium:~$</span> <span class="cur"></span></pre>
+    <section class="showcase" aria-roledescription="carousel" aria-label="Linuxium highlights">
+      <div class="slides" id="slides">
+        <article class="slide is-active" style="--slide-img:url('wallpaper.png')">
+          <div class="slide-copy">
+            <span class="slide-kicker">Smooth desktop</span>
+            <h2>A desktop that feels familiar, and stays out of the way.</h2>
+            <p>Cinnamon with the dark CBlack theme, Nemo file manager, and a clean panel. Everything is where you expect it — no learning curve.</p>
+            <a class="btn main" href="#inside">See what’s inside</a>
+          </div>
+        </article>
+        <article class="slide" style="--slide-img:url('grub-bg.png')">
+          <div class="slide-copy">
+            <span class="slide-kicker">Tetris boot</span>
+            <h2>Blocks fall. Lynx appears.</h2>
+            <p>The boot splash is a tiny Tetris game: coloured blocks drop into a well and build Lynx the penguin while your system starts.</p>
+            <a class="btn main" href="#get">Try the live USB</a>
+          </div>
+        </article>
+        <article class="slide" style="--slide-img:url('intro.png')">
+          <div class="slide-copy slide-copy-dark">
+            <span class="slide-kicker">Linuxium Experience</span>
+            <h2>Install with a smooth, dark installer.</h2>
+            <p>Circular step buttons rotate to guide you from welcome to finish. Partition, copy, and boot in a few clicks — no terminal needed.</p>
+            <a class="btn main" href="#get">How to install</a>
+          </div>
+        </article>
+        <article class="slide slide-gradient slide-wine">
+          <div class="slide-copy">
+            <span class="slide-kicker">Windows apps</span>
+            <h2>Run Windows software with Wine.</h2>
+            <p>Wine 8.0 and Winetricks are preinstalled. Double-click an <code>.exe</code> and it just opens — plus helpers for runtimes and fonts.</p>
+            <a class="btn main" href="#inside">What’s included</a>
+          </div>
+        </article>
+        <article class="slide slide-gradient slide-vm">
+          <div class="slide-copy">
+            <span class="slide-kicker">VMware ready</span>
+            <h2>Fast in VMware, with real 3D.</h2>
+            <p>Open VM Tools and vmwgfx acceleration are built in. Clipboard, drag-and-drop, and display resize work out of the box.</p>
+            <a class="btn main" href="#get">Get the ISO</a>
+          </div>
+        </article>
       </div>
-      <div class="win files">
-        <div class="tb">Home</div>
-        <ul>
-          <li>Desktop</li><li>Documents</li><li>Downloads</li>
-          <li>Music</li><li>Pictures</li><li>Videos</li>
-        </ul>
+      <div class="slideshow-controls">
+        <button class="slideshow-btn" id="prevSlide" type="button" aria-label="Previous slide">‹</button>
+        <div class="slideshow-dots" id="slideDots" role="tablist" aria-label="Choose slide"></div>
+        <button class="slideshow-btn" id="nextSlide" type="button" aria-label="Next slide">›</button>
       </div>
-      <div class="panel"><span>Menu</span><span>Terminal&nbsp;&nbsp;&nbsp;Files</span><span>10:24</span></div>
-    </div>
+      <p class="slideshow-status" id="slideStatus" aria-live="polite"></p>
+      <noscript><p class="fine">Enable JavaScript to browse the highlights slideshow. All highlights are listed below.</p></noscript>
+    </section>
 
     <section class="split" id="inside">
       <div>
@@ -77,8 +110,11 @@ ID_LIKE=debian
         <div><dt>Theme</dt><dd>CBlack — a dark Cinnamon and GTK theme</dd></div>
         <div><dt>Login screen</dt><dd>LightDM, with the Tux wallpaper behind it</dd></div>
         <div><dt>Apps</dt><dd>Firefox ESR, LibreOffice Writer and Calc, VLC</dd></div>
+        <div><dt>Windows apps</dt><dd>Wine 8.0 + Winetricks for running .exe files</dd></div>
+        <div><dt>Virtual machines</dt><dd>VMware Open VM Tools + vmwgfx 3D, QEMU and SPICE agents</dd></div>
+        <div><dt>Boot splash</dt><dd>Tetris blocks build Lynx the penguin (Plymouth)</dd></div>
         <div><dt>Sound and network</dt><dd>PipeWire and NetworkManager</dd></div>
-        <div><dt>Installing</dt><dd>Try the live session first, then install from it with Calamares</dd></div>
+        <div><dt>Installing</dt><dd>Try the live session first, then install with Linuxium Experience</dd></div>
       </dl>
     </section>
 
@@ -88,10 +124,10 @@ ID_LIKE=debian
         <p>Four steps, about ten minutes.</p>
       </div>
       <ol class="steps">
-        <li>Download the latest ISO from the Releases page.</li>
+        <li>Download the latest ISO (or the smaller <code>.iso.xz</code>) from the Releases page.</li>
         <li>Write it to a USB drive of 4 GB or more with balenaEtcher, or Rufus in DD mode. This erases the drive.</li>
         <li>Restart and open the boot menu (usually F12, F10, Esc, or Del), then pick the USB drive.</li>
-        <li>Choose the live session to look around, or the installer to put Linuxium on your disk.</li>
+        <li>Choose the live session to look around, or open <strong>Linuxium Experience</strong> to put Linuxium on your disk.</li>
       </ol>
       <p class="fine steps-note">UEFI Secure Boot is supported. If the stick won’t start, check that your firmware is booting in UEFI mode.</p>
     </section>
@@ -125,5 +161,63 @@ ID_LIKE=debian
   </footer>
 
 </div>
+<script>
+(function(){
+  var slides = Array.prototype.slice.call(document.querySelectorAll('.slide'));
+  var dotsWrap = document.getElementById('slideDots');
+  var status = document.getElementById('slideStatus');
+  var prev = document.getElementById('prevSlide');
+  var next = document.getElementById('nextSlide');
+  if(!slides.length || !dotsWrap) return;
+  var titles = slides.map(function(s){
+    var h = s.querySelector('h2');
+    return h ? h.textContent.trim() : 'Slide';
+  });
+  var current = 0, timer = null;
+  var reduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  function show(i){
+    current = (i + slides.length) % slides.length;
+    slides.forEach(function(s, j){
+      s.classList.toggle('is-active', j === current);
+      s.setAttribute('aria-hidden', j === current ? 'false' : 'true');
+    });
+    Array.prototype.forEach.call(dotsWrap.children, function(d, j){
+      d.classList.toggle('is-active', j === current);
+      d.setAttribute('aria-selected', j === current ? 'true' : 'false');
+    });
+    if(status) status.textContent = 'Slide ' + (current + 1) + ' of ' + slides.length + ': ' + titles[current];
+  }
+  function go(i){ show(i); restart(); }
+  function restart(){
+    if(timer) clearInterval(timer);
+    if(reduced) return;
+    timer = setInterval(function(){ show(current + 1); }, 5200);
+  }
+  titles.forEach(function(t, i){
+    var b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'slideshow-dot';
+    b.setAttribute('role', 'tab');
+    b.setAttribute('aria-label', 'Go to slide ' + (i + 1) + ': ' + t);
+    b.addEventListener('click', function(){ go(i); });
+    dotsWrap.appendChild(b);
+  });
+  if(prev) prev.addEventListener('click', function(){ go(current - 1); });
+  if(next) next.addEventListener('click', function(){ go(current + 1); });
+  var showcase = document.querySelector('.showcase');
+  if(showcase){
+    showcase.addEventListener('mouseenter', function(){ if(timer) clearInterval(timer); });
+    showcase.addEventListener('mouseleave', restart);
+    showcase.addEventListener('focusin', function(){ if(timer) clearInterval(timer); });
+    showcase.addEventListener('focusout', restart);
+    showcase.addEventListener('keydown', function(e){
+      if(e.key === 'ArrowLeft'){ go(current - 1); }
+      if(e.key === 'ArrowRight'){ go(current + 1); }
+    });
+  }
+  show(0);
+  restart();
+})();
+</script>
 </body>
 </html>
