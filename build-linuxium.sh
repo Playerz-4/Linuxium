@@ -29,8 +29,9 @@
 #     vmwgfx 3D support, and a Tetris-style Plymouth boot splash where
 #     falling blocks build Lynx the penguin.
 #   * Extra wallpapers (New York City, mountains, beach, forest, canyon,
-#     Tokyo, Nebula) downloaded from Wikimedia Commons, plus anything you
-#     drop in ./wallpapers/.
+#     Tokyo, Nebula) downloaded from Wikimedia Commons, the four shipped
+#     original Lynx wallpapers (Snowy Forest, Snowball Fight, Autumn Days,
+#     Starry Night), plus anything you drop in ./wallpapers/.
 #   * The scary "[drm:vmw_host_log [vmwgfx]] *ERROR* Failed to send host
 #     log message" seen in VirtualBox is a harmless vmwgfx/VMSVGA quirk,
 #     not your ISO failing. "loglevel=3" keeps it off the splash screen,
@@ -491,6 +492,9 @@ These photographs come from Wikimedia Commons. They were resized/cropped
 to 1920x1080 by the Linuxium build script; apart from that they are
 unmodified. Please keep this file with the images.
 
+The four Lynx wallpapers (Snowy Forest, Snowball Fight, Autumn Days and
+Starry Night) are original Linuxium artwork shipped in the repository.
+
 EOF
 
 WIKI_WALLPAPERS=(
@@ -535,6 +539,32 @@ for entry in "${WIKI_WALLPAPERS[@]}"; do
   else
     echo "WARNING: could not convert $wp_cache - deleting the cached copy and skipping this wallpaper" >&2
     rm -f "$wp_cache"
+  fi
+done
+
+# 5a2. Shipped Linuxium wallpapers: original Lynx artwork that lives in
+#      the repo root next to wallpaper.png. Converted to 1920x1080 JPG
+#      like the other extras so the ISO stays small.
+#      Format: source-file|display name|output-file
+SHIPPED_WALLPAPERS=(
+  "linuxium-snowy-forest.png|Snowy Forest|snowy-forest.jpg"
+  "linuxium-snowball-fight.png|Snowball Fight|snowball-fight.jpg"
+  "linuxium-autumn-days.png|Autumn Days|autumn-days.jpg"
+  "linuxium-starry-night.png|Starry Night|starry-night.jpg"
+)
+
+for entry in "${SHIPPED_WALLPAPERS[@]}"; do
+  IFS='|' read -r wp_src wp_name wp_out <<<"$entry"
+  if [ ! -f "$SCRIPT_DIR/$wp_src" ]; then
+    echo "WARNING: shipped wallpaper $wp_src not found - skipping" >&2
+    continue
+  fi
+  if "${IM[@]}" "$SCRIPT_DIR/$wp_src" -auto-orient -resize '1920x1080^' -gravity center \
+       -extent 1920x1080 -strip -quality 88 "$WP_DIR/$wp_out"; then
+    WP_NAMES+=("$wp_name")
+    WP_FILES+=("$wp_out")
+  else
+    echo "WARNING: could not convert $wp_src - skipping" >&2
   fi
 done
 
