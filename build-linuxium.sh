@@ -4831,7 +4831,7 @@ if [ -f binary/live/filesystem.squashfs ]; then
   ROOTFS_LISTING="$("${SUDO[@]}" unsquashfs -ll binary/live/filesystem.squashfs 2>/dev/null || true)"
   for root_part in \
     "/sbin/init" "/usr/sbin/lightdm" "/usr/bin/calamares" "/usr/bin/gimp" \
-    "/usr/bin/wine" "/usr/bin/wine64" "/usr/bin/winetricks" \
+    "/usr/bin/wine" "/usr/bin/wine-stable" "/usr/bin/wine64-stable" "/usr/bin/winetricks" \
     "/usr/bin/linuxium-experience" "/usr/bin/install-linuxium" \
     "/usr/lib/linuxium/linuxium-experience" \
     "/usr/share/xsessions/cinnamon.desktop" \
